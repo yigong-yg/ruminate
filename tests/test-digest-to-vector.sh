@@ -70,6 +70,46 @@ create_fixtures
 
 # --- Tests go here (added in subsequent tasks) ---
 
+echo "=== Chunking ==="
+
+# Source script (loads functions, does not run main)
+export DIGEST_DIR="$TEST_DIR"
+source "$SCRIPT"
+
+# Test: 3-section file produces 3 chunks
+chunks=()
+while IFS= read -r -d $'\x1e' chunk; do
+    chunks+=("$chunk")
+done < <(chunk_markdown "$TEST_DIR/2026-03-23.md")
+assert_eq "3-section file produces 3 chunks" "3" "${#chunks[@]}"
+
+# Test: first chunk starts with ## heading
+assert_contains "chunk 1 starts with heading" "## 主要话题" "${chunks[0]}"
+
+# Test: first chunk contains body text
+assert_contains "chunk 1 contains body" "服务器初建" "${chunks[0]}"
+
+# Test: top-level title not in any chunk
+all_chunks="${chunks[*]}"
+TOTAL=$((TOTAL + 1))
+if [[ "$all_chunks" != *"# 2026-03-23 群聊摘要"* ]]; then
+    echo "  PASS: top-level title excluded from chunks"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: top-level title found in chunks"
+    FAIL=$((FAIL + 1))
+fi
+
+# Test: 4-section file produces 4 chunks
+chunks2=()
+while IFS= read -r -d $'\x1e' chunk; do
+    chunks2+=("$chunk")
+done < <(chunk_markdown "$TEST_DIR/2026-03-24.md")
+assert_eq "4-section file produces 4 chunks" "4" "${#chunks2[@]}"
+
+# Test: last chunk of 4-section file
+assert_contains "last chunk is atmosphere" "高产出日" "${chunks2[3]}"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
