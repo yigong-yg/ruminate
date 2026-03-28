@@ -138,11 +138,11 @@ main() {
     log_verbose "Watermark: ${last_date:-(none)}"
 
     local files_processed=0 chunks_sent=0 chunks_failed=0
+    local filename
 
     for file in "$DIGEST_DIR"/*.md; do
         [[ -f "$file" ]] || continue
 
-        local filename
         filename=$(basename "$file" .md)
 
         # Skip files at or before watermark (lexicographic YYYY-MM-DD compare)
@@ -153,20 +153,26 @@ main() {
 
         log_verbose "Processing $filename..."
 
+        local file_failed=0
         while IFS= read -r -d $'\x1e' chunk; do
             [[ -z "$chunk" ]] && continue
             if post_chunk "$filename" "$chunk"; then
                 chunks_sent=$((chunks_sent + 1))
             else
-                chunks_failed=$((chunks_failed + 1))
+                file_failed=$((file_failed + 1))
             fi
         done < <(chunk_markdown "$file")
 
+        chunks_failed=$((chunks_failed + file_failed))
         files_processed=$((files_processed + 1))
-        log "Processed $filename"
 
-        if [[ "$DRY_RUN" != "true" ]]; then
-            write_watermark "$filename"
+        if [[ "$file_failed" -eq 0 ]]; then
+            log "Processed $filename"
+            if [[ "$DRY_RUN" != "true" ]]; then
+                write_watermark "$filename"
+            fi
+        else
+            log "WARN: $filename had $file_failed failed chunks, watermark not advanced"
         fi
     done
 

@@ -31,7 +31,7 @@ assert_contains() {
 
 # --- Fixtures ---
 TEST_DIR=$(mktemp -d)
-trap "rm -rf $TEST_DIR" EXIT
+trap 'rm -rf "$TEST_DIR"' EXIT
 
 create_fixtures() {
     cat > "$TEST_DIR/2026-03-23.md" << 'FIXTURE'
