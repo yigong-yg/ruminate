@@ -17,6 +17,31 @@ DIGEST_DIR="${DIGEST_DIR:-$HOME/.config/alma/memory/digest}"
 DRY_RUN="${DRY_RUN:-false}"
 VERBOSE="${VERBOSE:-false}"
 
+WATERMARK_FILE="${WATERMARK_FILE:-${DIGEST_DIR}/.vector-watermark}"
+LOG_FILE="${DIGEST_DIR}/.vector-log"
+
+# --- Logging ---
+log() {
+    local msg="[$(date -Iseconds)] $*"
+    [[ -d "$(dirname "$LOG_FILE")" ]] && echo "$msg" >> "$LOG_FILE" || true
+}
+log_verbose() { [[ "$VERBOSE" == "true" ]] && echo "$*" >&2 || true; }
+
+# --- Watermark ---
+read_watermark() {
+    if [[ -f "$WATERMARK_FILE" ]]; then
+        jq -r '.lastDate // ""' "$WATERMARK_FILE"
+    else
+        echo ""
+    fi
+}
+
+write_watermark() {
+    local date="$1"
+    jq -n --arg date "$date" --arg ts "$(date -Iseconds)" \
+        '{lastProcessed: $ts, lastDate: $date}' > "$WATERMARK_FILE"
+}
+
 # --- Chunking ---
 # Splits a markdown file by ## headings.
 # Outputs chunks separated by ASCII Record Separator (0x1e).

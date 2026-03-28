@@ -111,5 +111,39 @@ assert_eq "4-section file produces 4 chunks" "4" "${#chunks2[@]}"
 assert_contains "last chunk is atmosphere" "高产出日" "${chunks2[3]}"
 
 echo ""
+echo "=== Watermark ==="
+
+# Test: read returns empty when no watermark file
+WATERMARK_FILE="$TEST_DIR/.vector-watermark"
+rm -f "$WATERMARK_FILE"
+result=$(read_watermark)
+assert_eq "no watermark file → empty string" "" "$result"
+
+# Test: write then read roundtrip
+write_watermark "2026-03-23"
+result=$(read_watermark)
+assert_eq "write/read roundtrip" "2026-03-23" "$result"
+
+# Test: watermark file is valid JSON
+TOTAL=$((TOTAL + 1))
+if jq -e . "$WATERMARK_FILE" > /dev/null 2>&1; then
+    echo "  PASS: watermark is valid JSON"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: watermark is not valid JSON"; FAIL=$((FAIL + 1))
+fi
+
+# Test: watermark has ISO timestamp in lastProcessed
+ts=$(jq -r '.lastProcessed' "$WATERMARK_FILE")
+assert_contains "lastProcessed has ISO timestamp" "202" "$ts"
+
+# Test: overwrite updates lastDate
+write_watermark "2026-03-25"
+result=$(read_watermark)
+assert_eq "overwrite updates lastDate" "2026-03-25" "$result"
+
+# Cleanup
+rm -f "$WATERMARK_FILE"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
