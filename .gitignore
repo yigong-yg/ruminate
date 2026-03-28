@@ -21,6 +21,5 @@ __pycache__/
 *.tmp
 *.log
 
-# Local working files
 docs/
 .claude/
