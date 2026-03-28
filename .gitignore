@@ -20,5 +20,3 @@ __pycache__/
 # Temp
 *.tmp
 *.log
-.claude/
-docs/
