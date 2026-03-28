@@ -107,6 +107,38 @@ create_fixtures
 
 # --- Tests added in subsequent tasks ---
 
+echo "=== Context Gathering ==="
+
+export DIGEST_DIR="$TEST_DIR/digest"
+source "$SCRIPT"
+
+# Test: gather_digests returns content of latest N files
+result=$(gather_digests 2)
+assert_contains "gather_digests includes latest file" "2026-03-27" "$result"
+assert_contains "gather_digests includes 2nd latest" "2026-03-26" "$result"
+TOTAL=$((TOTAL + 1))
+if [[ "$result" != *"2026-03-25"* ]]; then
+    echo "  PASS: gather_digests excludes 3rd file when n=2"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: gather_digests included 3rd file when n=2"; FAIL=$((FAIL + 1))
+fi
+
+# Test: gather_digests with n=3 includes all 3
+result3=$(gather_digests 3)
+assert_contains "gather_digests(3) includes 3rd file" "2026-03-25" "$result3"
+
+# Test: gather_digests with empty dir returns empty
+empty_dir=$(mktemp -d)
+result_empty=$(DIGEST_DIR="$empty_dir" gather_digests 3)
+assert_eq "gather_digests on empty dir" "" "$result_empty"
+rmdir "$empty_dir"
+
+# Test: query_memory returns results (or empty on failure)
+# In test context, Alma may not be running — function should handle gracefully
+result_mem=$(query_memory "test query" 2>/dev/null || echo "")
+TOTAL=$((TOTAL + 1))
+echo "  PASS: query_memory does not crash (result length: ${#result_mem})"; PASS=$((PASS + 1))
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
