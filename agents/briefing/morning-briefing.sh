@@ -15,9 +15,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "${REPO_ROOT}/orchestrator/api-client.sh"
 
-# Load OPENAI_API_KEY from .env via grep — never source .env as shell code
+# Load OPENAI_API_KEY from .env via grep — never source .env as shell code.
+# grep || true prevents set -e crash when key is absent from .env.
 if [[ -z "${OPENAI_API_KEY:-}" && -f "${REPO_ROOT}/.env" ]]; then
-    OPENAI_API_KEY=$(grep -E '^OPENAI_API_KEY=' "${REPO_ROOT}/.env" | head -1 | cut -d= -f2-)
+    OPENAI_API_KEY=$(grep -E '^OPENAI_API_KEY=' "${REPO_ROOT}/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)
     OPENAI_API_KEY="${OPENAI_API_KEY%\"}" # strip trailing quote
     OPENAI_API_KEY="${OPENAI_API_KEY#\"}" # strip leading quote
     export OPENAI_API_KEY

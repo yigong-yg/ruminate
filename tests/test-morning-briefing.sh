@@ -334,5 +334,29 @@ else
 fi
 
 echo ""
+echo "=== Missing API Key in .env ==="
+
+# Test: .env exists but has no OPENAI_API_KEY — dry-run must still work
+env_dir=$(mktemp -d)
+mkdir -p "$env_dir/orchestrator"
+cp "$REPO_ROOT_REAL/orchestrator/api-client.sh" "$env_dir/orchestrator/"
+echo "SOME_OTHER_KEY=value" > "$env_dir/.env"
+# Copy script + prompt to a temp location with the fake REPO_ROOT
+cp -r "$REPO_ROOT_REAL/agents" "$env_dir/"
+
+output=$(DIGEST_DIR="$TEST_DIR/digest" REPO_ROOT="$env_dir" DRY_RUN=true OPENAI_API_KEY="" \
+    bash "$env_dir/agents/briefing/morning-briefing.sh" --dry-run 2>&1) || true
+assert_contains "missing key: dry-run still works" "DRY-RUN" "$output"
+
+# Test: full mode fails with call_openai's error, not grep crash
+# Unset OPENAI_API_KEY (parent may have it from source "$SCRIPT")
+# Use dead Alma URL so memory queries fail fast
+output_full=$(DIGEST_DIR="$TEST_DIR/digest" REPO_ROOT="$env_dir" ALMA_BASE_URL="http://localhost:1" OPENAI_API_KEY="" \
+    bash "$env_dir/agents/briefing/morning-briefing.sh" 2>&1) || true
+assert_contains "missing key: clean error from call_openai" "OPENAI_API_KEY not set" "$output_full"
+
+rm -rf "$env_dir"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
