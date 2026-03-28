@@ -140,5 +140,25 @@ TOTAL=$((TOTAL + 1))
 echo "  PASS: query_memory does not crash (result length: ${#result_mem})"; PASS=$((PASS + 1))
 
 echo ""
+echo "=== Prompt Assembly ==="
+
+# Test: assemble_prompt includes digest content
+prompt=$(assemble_prompt "test digest content" "test memory results")
+assert_contains "prompt has digest content" "test digest content" "$prompt"
+assert_contains "prompt has memory results" "test memory results" "$prompt"
+
+# Test: assemble_prompt includes template instructions
+assert_contains "prompt has iceberg philosophy" "Iceberg" "$prompt"
+assert_contains "prompt has word limit" "500 words" "$prompt"
+assert_contains "prompt has output sections" "Connections" "$prompt"
+assert_contains "prompt has output sections" "Unresolved" "$prompt"
+assert_contains "prompt has output sections" "Insight" "$prompt"
+
+# Test: assemble_prompt with empty memory gracefully handles it
+prompt_no_mem=$(assemble_prompt "digest only" "")
+assert_contains "prompt works without memory" "digest only" "$prompt_no_mem"
+assert_contains "no-memory prompt still has structure" "Connections" "$prompt_no_mem"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

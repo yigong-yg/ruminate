@@ -100,6 +100,35 @@ ${result}
     echo "$all_results"
 }
 
+# --- Prompt Assembly ---
+
+# Build the full prompt by substituting context into the template.
+assemble_prompt() {
+    local digest_content="$1"
+    local memory_results="$2"
+    local n_days="$BRIEFING_DAYS"
+
+    if [[ ! -f "$PROMPT_TEMPLATE" ]]; then
+        echo "ERROR: Prompt template not found at $PROMPT_TEMPLATE" >&2
+        return 1
+    fi
+
+    local template
+    template=$(cat "$PROMPT_TEMPLATE")
+
+    # Substitute placeholders
+    template="${template//\{n_days\}/$n_days}"
+    template="${template//\{digest_content\}/$digest_content}"
+
+    if [[ -n "$memory_results" ]]; then
+        template="${template//\{memory_results\}/$memory_results}"
+    else
+        template="${template//\{memory_results\}/(No semantic memory results available — synthesize from digests only)}"
+    fi
+
+    echo "$template"
+}
+
 # Only run main when executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "morning-briefing: not yet fully implemented"
