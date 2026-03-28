@@ -200,7 +200,63 @@ call_openai() {
     parse_response "$response_body"
 }
 
-# Only run main when executed directly
+# --- Main ---
+main() {
+    local shift_next=""
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) DRY_RUN=true ;;
+            --days) shift_next=days ;;
+            --model) shift_next=model ;;
+            *)
+                if [[ "${shift_next}" == "days" ]]; then
+                    BRIEFING_DAYS="$arg"; shift_next=""
+                elif [[ "${shift_next}" == "model" ]]; then
+                    BRIEFING_MODEL="$arg"; shift_next=""
+                fi
+                ;;
+        esac
+    done
+
+    # 1. Gather context
+    local digests
+    digests=$(gather_digests "$BRIEFING_DAYS")
+    if [[ -z "$digests" ]]; then
+        echo "ERROR: No digest files found in $DIGEST_DIR" >&2
+        exit 1
+    fi
+
+    local memory_results=""
+    if [[ "$DRY_RUN" != "true" ]]; then
+        memory_results=$(gather_memory 2>/dev/null) || true
+    fi
+
+    # 2. Assemble prompt
+    local prompt
+    prompt=$(assemble_prompt "$digests" "$memory_results")
+
+    # 3. Synthesize or dry-run
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "--- DRY-RUN: assembled prompt (model=$BRIEFING_MODEL, days=$BRIEFING_DAYS) ---"
+        echo ""
+        echo "$prompt"
+        return 0
+    fi
+
+    local briefing
+    briefing=$(call_openai "$prompt") || {
+        echo "ERROR: Synthesis failed" >&2
+        exit 1
+    }
+
+    if [[ -z "$briefing" ]]; then
+        echo "ERROR: Empty response from OpenAI" >&2
+        exit 1
+    fi
+
+    echo "$briefing"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "morning-briefing: not yet fully implemented"
+    main "$@"
 fi

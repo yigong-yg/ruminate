@@ -189,5 +189,31 @@ result=$(parse_response "$html_response")
 assert_eq "parse_response returns empty on HTML" "" "$result"
 
 echo ""
+echo "=== Dry-Run End-to-End ==="
+
+# Test: dry-run outputs the assembled prompt, not a briefing
+output=$(DIGEST_DIR="$TEST_DIR/digest" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1)
+assert_contains "dry-run has digest content" "2026-03-27" "$output"
+assert_contains "dry-run has prompt structure" "Connections" "$output"
+assert_contains "dry-run has prompt structure" "Unresolved" "$output"
+assert_contains "dry-run shows mode indicator" "DRY-RUN" "$output"
+
+# Test: --days flag controls how many digests are included
+output2=$(DIGEST_DIR="$TEST_DIR/digest" DRY_RUN=true bash "$SCRIPT" --dry-run --days 1 2>&1)
+assert_contains "days=1 includes latest" "2026-03-27" "$output2"
+TOTAL=$((TOTAL + 1))
+if [[ "$output2" != *"2026-03-25"* ]]; then
+    echo "  PASS: days=1 excludes older files"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: days=1 included older files"; FAIL=$((FAIL + 1))
+fi
+
+# Test: dry-run with no digest files
+empty_dir2=$(mktemp -d)
+output3=$(DIGEST_DIR="$empty_dir2" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1) || true
+assert_contains "no digests: shows error" "No digest files" "$output3"
+rmdir "$empty_dir2"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
