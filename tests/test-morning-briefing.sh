@@ -160,5 +160,34 @@ assert_contains "prompt works without memory" "digest only" "$prompt_no_mem"
 assert_contains "no-memory prompt still has structure" "Connections" "$prompt_no_mem"
 
 echo ""
+echo "=== Synthesis ==="
+
+# Test: build_openai_payload creates valid JSON
+payload=$(build_openai_payload "Test system prompt" "gpt-4o-mini")
+TOTAL=$((TOTAL + 1))
+if echo "$payload" | jq -e . > /dev/null 2>&1; then
+    echo "  PASS: payload is valid JSON"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: payload is not valid JSON"; FAIL=$((FAIL + 1))
+fi
+assert_contains "payload has model" "gpt-4o-mini" "$payload"
+assert_contains "payload has system message" "Test system prompt" "$payload"
+
+# Test: parse_response extracts content from OpenAI response
+mock_response='{"choices":[{"message":{"content":"Briefing text here"}}]}'
+result=$(parse_response "$mock_response")
+assert_eq "parse_response extracts content" "Briefing text here" "$result"
+
+# Test: parse_response handles error response
+error_response='{"error":{"message":"Invalid API key"}}'
+result=$(parse_response "$error_response")
+assert_eq "parse_response returns empty on error" "" "$result"
+
+# Test: parse_response handles non-JSON
+html_response='<html>502 Bad Gateway</html>'
+result=$(parse_response "$html_response")
+assert_eq "parse_response returns empty on HTML" "" "$result"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

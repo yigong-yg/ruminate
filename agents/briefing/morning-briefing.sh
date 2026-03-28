@@ -129,6 +129,77 @@ assemble_prompt() {
     echo "$template"
 }
 
+# --- Synthesis ---
+
+# Build the OpenAI API request payload. Returns JSON string.
+build_openai_payload() {
+    local prompt="$1"
+    local model="${2:-$BRIEFING_MODEL}"
+
+    jq -n \
+        --arg model "$model" \
+        --arg prompt "$prompt" \
+        --argjson max_tokens 1000 \
+        --argjson temperature 0.7 \
+        '{
+            model: $model,
+            messages: [
+                {role: "system", content: $prompt}
+            ],
+            max_tokens: $max_tokens,
+            temperature: $temperature
+        }'
+}
+
+# Extract the briefing text from OpenAI's response. Returns empty on error.
+parse_response() {
+    local response="$1"
+    echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null || echo ""
+}
+
+# Call OpenAI API. Returns the briefing text or empty string on failure.
+call_openai() {
+    local prompt="$1"
+
+    if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+        echo "ERROR: OPENAI_API_KEY not set. Source .env or export it." >&2
+        return 1
+    fi
+
+    local payload
+    payload=$(build_openai_payload "$prompt")
+
+    local tmpfile
+    tmpfile=$(mktemp)
+    echo "$payload" > "$tmpfile"
+
+    local raw_response http_code response_body
+    raw_response=$(curl -s -w '\n%{http_code}' --max-time "$CURL_TIMEOUT" \
+        -X POST "https://api.openai.com/v1/chat/completions" \
+        -H "Authorization: Bearer $OPENAI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d @"$tmpfile" 2>&1)
+    local curl_exit=$?
+    rm -f "$tmpfile"
+
+    if [[ $curl_exit -ne 0 ]]; then
+        echo "ERROR: OpenAI API call failed (curl exit $curl_exit)" >&2
+        return 1
+    fi
+
+    http_code=$(echo "$raw_response" | tail -1)
+    response_body=$(echo "$raw_response" | sed '$d')
+
+    if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]] 2>/dev/null; then
+        local err_msg
+        err_msg=$(echo "$response_body" | jq -r '.error.message // empty' 2>/dev/null)
+        echo "ERROR: OpenAI API returned HTTP $http_code: ${err_msg:-unknown error}" >&2
+        return 1
+    fi
+
+    parse_response "$response_body"
+}
+
 # Only run main when executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "morning-briefing: not yet fully implemented"
