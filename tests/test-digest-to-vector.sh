@@ -202,5 +202,55 @@ assert_contains "partial resume: skip message" "Skip chunk" "$output"
 rm -f "$TEST_DIR/.vector-watermark"
 
 echo ""
+echo "=== Partial Failure State Machine ==="
+
+# This test verifies the full failure → resume → complete cycle by overriding
+# post_chunk with a stub that fails on a specific call, then running main()
+# directly (non-dry-run path but no real HTTP).
+
+# Run 1: post_chunk fails on 2026-03-23 chunk index 1 (2nd chunk)
+rm -f "$TEST_DIR/.vector-watermark" "$TEST_DIR/.vector-log"
+(
+    export DIGEST_DIR="$TEST_DIR"
+    export WATERMARK_FILE="$TEST_DIR/.vector-watermark"
+    source "$SCRIPT"
+
+    CALL=0
+    post_chunk() {
+        CALL=$((CALL + 1))
+        if [[ $CALL -eq 2 ]]; then return 1; fi  # fail 2nd chunk of 2026-03-23
+        return 0
+    }
+    main
+) > /tmp/sm_run1.txt 2>&1
+
+# Watermark should have partial state for 2026-03-23, NOT 2026-03-24
+wm_partial_file=$(jq -r '.partial.file // ""' "$TEST_DIR/.vector-watermark" 2>/dev/null)
+wm_last_date=$(jq -r '.lastDate // ""' "$TEST_DIR/.vector-watermark" 2>/dev/null)
+assert_eq "run1: partial file is 2026-03-23" "2026-03-23" "$wm_partial_file"
+assert_eq "run1: lastDate not advanced past failure" "" "$wm_last_date"
+assert_contains "run1: reports failure" "1 failed" "$(cat /tmp/sm_run1.txt)"
+
+# Run 2: post_chunk always succeeds — should resume 2026-03-23 from chunk 1, then process 2026-03-24
+(
+    export DIGEST_DIR="$TEST_DIR"
+    export WATERMARK_FILE="$TEST_DIR/.vector-watermark"
+    source "$SCRIPT"
+
+    post_chunk() { return 0; }
+    main
+) > /tmp/sm_run2.txt 2>&1
+
+wm_last_date=$(jq -r '.lastDate // ""' "$TEST_DIR/.vector-watermark" 2>/dev/null)
+wm_partial=$(jq -r '.partial // "null"' "$TEST_DIR/.vector-watermark" 2>/dev/null)
+assert_eq "run2: lastDate is 2026-03-24" "2026-03-24" "$wm_last_date"
+assert_eq "run2: no partial state" "null" "$wm_partial"
+assert_contains "run2: zero failures" "0 failed" "$(cat /tmp/sm_run2.txt)"
+# Run 2 should send: 2026-03-23 chunks 1-2 (resumed) + 2026-03-24 all 4 = 6
+assert_contains "run2: 6 chunks sent (2 resumed + 4 new)" "6 chunks sent" "$(cat /tmp/sm_run2.txt)"
+
+rm -f "$TEST_DIR/.vector-watermark" "$TEST_DIR/.vector-log" /tmp/sm_run1.txt /tmp/sm_run2.txt
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
