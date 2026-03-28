@@ -1,0 +1,22 @@
+# Secrets
+.env
+*.key
+creds/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+
+# Runtime
+node_modules/
+__pycache__/
+*.pyc
+
+# Temp
+*.tmp
+*.log
