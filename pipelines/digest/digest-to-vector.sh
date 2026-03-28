@@ -258,7 +258,9 @@ main() {
         elif [[ "$file_failed" == false && $total_file_chunks -eq 0 ]]; then
             log "WARN: $filename had no chunks, skipping"
         fi
-        # file_failed == true: partial state already saved, move to next file
+        if [[ "$file_failed" == true ]]; then
+            break  # Stop run: do not advance watermark past a failed file
+        fi
     done
 
     echo "$files_processed files, $chunks_sent chunks sent, $chunks_failed failed"
