@@ -75,7 +75,7 @@ ${line}"
 # --- Preflight ---
 preflight_check() {
     local model
-    model=$(alma_get "/api/memories/embedding-model" 2>/dev/null | jq -r '.model // "null"') || {
+    model=$(alma_get "/api/settings" 2>/dev/null | jq -r '.memory.embeddingModel // "null"') || {
         echo "ERROR: Cannot reach Alma at $ALMA_BASE_URL" >&2
         return 1
     }
@@ -106,11 +106,21 @@ post_chunk() {
         return 0
     fi
 
+    # Write payload to temp file for curl — avoids Windows UTF-8 corruption
+    # when passing CJK content via -d "$string"
+    local tmpfile
+    tmpfile=$(mktemp)
+    echo "$payload" > "$tmpfile"
+
     local response
-    response=$(alma_post "/api/memories" "$payload" 2>&1) || {
+    response=$(curl -s -X POST "${ALMA_BASE_URL}/api/memories" \
+        -H "Content-Type: application/json" \
+        -d @"$tmpfile" 2>&1) || {
+        rm -f "$tmpfile"
         log "WARN: POST connection failed for $date"
         return 1
     }
+    rm -f "$tmpfile"
 
     local error
     error=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
