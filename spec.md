@@ -1,8 +1,8 @@
 # Ruminate System Spec
-**Status**: v3 — CC 审查修正 + Meowfis 修订
+**Status**: v4 — 完整管道架构 + 重构
 **Date**: 2026-03-27
 **Roles**: Karla (架构师+用户) · Meowfis/Alma (PM) · Claude Code (工程师)
-**v3 变更**: Embedding 首选改 OpenAI · 费用估算修正 + 成本优化路径 · 圣女之路用例挂钩 · 数据生命周期问题 · NotebookLM API 评估
+**v4 变更**: 完整 8 阶段管道架构 · alma-bridge → orchestrator（agent-agnostic）· 新增 indexer/ranker/feedback 层 · 目录结构重构
 
 ---
 
@@ -81,6 +81,36 @@
 4. **可观测性**: 每个 agent 的输入、输出、错误必须可追溯
 5. **输入端治理**: 系统管输入质量，输出判断是 agent 的事
 
+### 1.4 完整管道架构
+
+```
+① 原始数据源    ② 范式转换      ③ 索引层          ④ 推荐系统       ⑤ Orchestrator    ⑥ Context Budget    ⑦ Agent 消费     ⑧ 反馈回路
+
+YouTube ──┐                     ┌─ 元数据提取 ─┐                  ┌──────────┐     ┌──────────────┐    ┌─────────┐
+Podcast ──┤   ┌───────────┐    │  topic, lang, │  ┌──────────┐   │ 路由决策  │     │ 上下文窗口    │    │ Agent   │   隐式:
+RSS ──────┼──→│ Ingestion │→.md┤  source, time ├─→│ Ranker   │──→│          │────→│ 预算分配      │───→│ (任意)  │──→引用?
+Discord ──┤   │ Pipeline  │    │  quality_est  │  │          │   │ briefing │     │              │    │         │   追问?
+Manual ───┘   └───────────┘    ├─ 去重/冲突 ───┤  │ 粗排:    │   │ research │     │ briefing:15k │    │ Alma    │   忽略?
+                    │          ├─ 分块策略 ────┤  │  相关性  │   │ creative │     │ research:20k │    │ CC      │
+                    │          │  章节/语义边界 │  │  时效性  │   │ 丢弃     │     │ creative:15k │    │ 未来X   │   显式:
+                    │          └───────────────┘  │  新颖性  │   └──────────┘     │              │    └─────────┘──→有用?
+                    │                 │           │          │                    │ 超预算→摘要   │         │       没用?
+                    │                 ↓           │ 精排:    │                    └──────────────┘         │       更多?
+                    │           索引写入          │  用户画像 │                                             │
+                    │           (文件目录 +       │  多样性  │                                             │
+                    │            可选: 向量)      │  衰减率  │                                             ↓
+                    │                             └──────────┘                              用户画像更新 → ④ 权重调整
+```
+
+**时间衰减策略（按内容类型）：**
+
+| 内容类型 | 衰减速率 | 理由 |
+|---|---|---|
+| 新闻/投资信号 | 快（24h 半衰期） | 时效性强，过期即噪音 |
+| 技术教程 | 慢（30d 半衰期） | 知识价值缓慢衰减 |
+| 小说世界观/设定 | 无衰减 | 永久有效 |
+| 研究报告 | 中（7d 半衰期） | 结论可能被新发现推翻 |
+
 ---
 
 ## 2. Agent 清单
@@ -102,27 +132,29 @@
 ### 3.1 Agent 间通信
 
 ```
-Claude Code ──REST──→ Alma Server (:23001)    # 结构化操作
-Alma Server ──File──→ ~/.config/alma/         # 持久化
-Cloud Worker ──REST──→ Alma Server             # 结果回写
+Orchestrator ──REST──→ Agent Server (任意)     # 结构化操作（Alma :23001 是当前实例）
+Agent Server ──File──→ shared filesystem       # 持久化
+Cloud Worker ──REST──→ Orchestrator            # 结果回写
 Karla ──────Human────→ 跨 Agent 中转           # 当前模式，未来可自动化
 ```
 
 **规则：**
-- 所有写操作走 REST API，不直接碰 SQLite（保护 Alma 业务逻辑：去重、embedding 触发等）
-- 文件系统是共享读取层（Alma 和 CC 都可读）
+- Orchestrator 是 agent-agnostic 的——Alma 是当前适配的第一个 agent，不是唯一的
+- 所有写操作走 REST API，不直接碰 SQLite（保护下游 agent 的业务逻辑）
+- 文件系统是共享读取层
 - CC 是无状态执行器，不存储会话状态
 
-### 3.2 数据流向
+### 3.2 数据流向（完整 8 阶段）
 
 ```
-[外部源]                    [处理层]              [存储层]              [消费层]
+[① 数据源]     [② Ingestion]    [③ Indexer]        [④ Ranker]     [⑤⑥ Orchestrator]   [⑦ Agent]   [⑧ Feedback]
 
-YouTube ───→ Ingestion ──→ transcript.md ──→ ┐
-Podcast ───→ Ingestion ──→ episode.md    ──→ ├→ memory/         ──→ Alma (对话检索)
-Browser ───→ Ingestion ──→ bookmark.md   ──→ ┤   digest/            Claude Code (开发上下文)
-Discord ───→ Digest    ──→ {date}.md     ──→ ┤   ingested/          晨间 Briefing
-Substack ──→ RSS       ──→ article.md    ──→ ┘   research/          推荐系统 (未来)
+YouTube ───┐                     元数据提取 ──┐
+Podcast ───┤   ┌───────────┐    去重/冲突 ────┤   粗排 ──┐      路由 ──→ 预算 ──→ Agent ──→ 信号采集
+RSS ───────┼──→│ Pipeline  │→.md 分块 ────────┘   精排 ──┘      决策      分配      消费      ↓
+Discord ───┤   └───────────┘                                                               画像更新
+Manual ────┘                                                                                 ↓
+                                                                                         ④ 权重调整
 ```
 
 ---
@@ -270,7 +302,7 @@ Pipeline:
 ## 5. 存储架构
 
 ```
-~/.config/alma/
+~/.config/alma/                          # Agent 运行时状态（Alma 实例）
 ├── memory/
 │   ├── digest/              # 每日 Discord 摘要
 │   │   ├── {YYYY-MM-DD}.md
@@ -288,17 +320,40 @@ Pipeline:
 ├── groups/                  # 原始 Discord 日志 (只读)
 └── people/                  # 人物档案
 
-./agent-integrations/        # Claude Code 侧实现
-├── spec.md                  # 本文件
+ruminate/                                # 本 repo: 管道 + 编排 + 推荐
+├── spec.md                  # 本文件（产品真相源）
 ├── decisions.md             # 架构决策记录 (ADR)
-├── scripts/
-│   ├── digest-to-vector.sh  # 胶水层: digest → 向量
-│   ├── youtube-ingest.sh    # YouTube 转写管道
-│   └── bulk-import.sh       # 批量导入工具
-├── skills/                  # 自定义 Alma Skills
-│   └── (待定)
+│
+├── pipelines/               # ①② 数据采集 + 范式转换
+│   ├── digest/              # Discord 日志 → 摘要
+│   ├── youtube/             # YouTube → 转写 + 摘要
+│   ├── podcast/             # 播客 → 转写 + 摘要
+│   └── creative/            # 圣女之路小说内容入库
+│
+├── indexer/                 # ③ 索引层
+│   ├── metadata-extractor/  # 元数据提取 (topic, source, quality)
+│   ├── dedup/               # 去重 / 冲突检测
+│   └── chunker/             # 分块策略 (章节/语义边界)
+│
+├── ranker/                  # ④ 推荐系统
+│   ├── coarse/              # 粗排 (相关性, 时效性, 新颖性)
+│   ├── fine/                # 精排 (用户画像, 多样性, 衰减率)
+│   └── feedback/            # ⑧ 反馈回路 (信号采集 → 画像更新)
+│
+├── orchestrator/            # ⑤⑥ 路由 + 上下文预算（agent-agnostic）
+│   ├── router/              # 内容 → agent 路由决策
+│   ├── budget/              # context window 预算分配
+│   ├── api-client.sh        # 通用 agent REST API 封装
+│   └── adapters/            # 各 agent 的适配器
+│       ├── alma-*/           # Alma 适配 + 逆向文档
+│       └── (future agents)
+│
+├── agents/                  # ⑦ Agent 定义
+│   ├── briefing/            # 晨间 briefing
+│   └── research/            # 深度研究
+│
+├── infra/                   # 云端 worker 部署配置
 └── tests/
-    └── (待定)
 ```
 
 ---
@@ -362,6 +417,10 @@ Pipeline:
 | Embedding provider 首选？ | OpenAI `text-embedding-3-small`（切换成本 >> 价格差）| CC审查 |
 | 圣女之路实现路径？ | 向量记忆语义搜索，小说内容入库 | CC审查 |
 | NotebookLM 转写可行性？ | 无官方 API，`notebooklm-py` 可探索但不作为主路径 | CC审查 |
+| alma-bridge 命名？ | → orchestrator（agent-agnostic，Alma 只是第一个适配的 agent）| R4 |
+| 管道缺失层？ | 补全: indexer(③元数据/去重/分块) + ranker(④推荐) + budget(⑥上下文预算) + feedback(⑧) | R4 |
+| 第二次输入筛选必要性？ | 必要——是 context window 预算分配，不是重复筛选 | R4 |
+| 时间衰减策略？ | 按内容类型差异化：新闻24h、教程30d、设定永不衰减 | R4 |
 
 ## 9. 剩余开放问题（实现阶段按需补充）
 
@@ -378,5 +437,6 @@ Pipeline:
 
 ---
 
-*本文档由 Meowfis (PM) 根据三轮 Ruminate 对话整理。最终实现在 `./agent-integrations/` 目录下。*
+*本文档由 Meowfis (PM) 根据四轮 Ruminate 对话整理。*
+*Repo: github.com/yigong-yg/ruminate*
 *下次更新：M2 YouTube Ingestion 详细设计*
