@@ -145,5 +145,31 @@ assert_eq "overwrite updates lastDate" "2026-03-25" "$result"
 rm -f "$WATERMARK_FILE"
 
 echo ""
+echo "=== Dry-Run End-to-End ==="
+
+# Test: processes all files when no watermark exists
+output=$(DIGEST_DIR="$TEST_DIR" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1)
+assert_contains "processes 2 files" "2 files" "$output"
+assert_contains "sends 7 chunks" "7 chunks sent" "$output"
+assert_contains "zero failures" "0 failed" "$output"
+
+# Test: watermark NOT written in dry-run
+TOTAL=$((TOTAL + 1))
+if [[ ! -f "$TEST_DIR/.vector-watermark" ]]; then
+    echo "  PASS: dry-run does not write watermark"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: dry-run wrote watermark"; FAIL=$((FAIL + 1))
+fi
+
+# Test: watermark causes older files to be skipped
+echo '{"lastProcessed":"2026-03-27T00:00:00Z","lastDate":"2026-03-23"}' > "$TEST_DIR/.vector-watermark"
+output=$(DIGEST_DIR="$TEST_DIR" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1)
+assert_contains "skips file at watermark, processes 1" "1 files" "$output"
+assert_contains "only newer file chunks" "4 chunks sent" "$output"
+
+# Cleanup
+rm -f "$TEST_DIR/.vector-watermark"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
