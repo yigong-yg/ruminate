@@ -158,6 +158,8 @@ parse_response() {
 }
 
 # Call OpenAI API. Returns the briefing text or empty string on failure.
+# Uses Node.js instead of curl — curl 8.8.0/Schannel on Windows fails on
+# POST bodies >~2KB (exit 43, HTTP 000). Node.js handles this correctly.
 call_openai() {
     local prompt="$1"
 
@@ -169,35 +171,53 @@ call_openai() {
     local payload
     payload=$(build_openai_payload "$prompt")
 
-    local tmpfile
-    tmpfile=$(mktemp)
-    echo "$payload" > "$tmpfile"
+    local payloadfile
+    payloadfile=$(mktemp --suffix=.json)
+    echo "$payload" > "$payloadfile"
+    # Convert to Windows path for Node.js fs module
+    local winpath
+    winpath=$(cygpath -w "$payloadfile")
 
-    local raw_response http_code response_body
-    raw_response=$(curl -s -w '\n%{http_code}' --max-time "$CURL_TIMEOUT" \
-        -X POST "https://api.openai.com/v1/chat/completions" \
-        -H "Authorization: Bearer $OPENAI_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d @"$tmpfile" 2>&1)
-    local curl_exit=$?
-    rm -f "$tmpfile"
+    local result
+    result=$(node -e "
+const fs = require('fs');
+const https = require('https');
+const payload = fs.readFileSync(String.raw\`${winpath}\`, 'utf8');
+const req = https.request({
+    hostname: 'api.openai.com',
+    path: '/v1/chat/completions',
+    method: 'POST',
+    headers: {
+        'Authorization': 'Bearer ${OPENAI_API_KEY}',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+    },
+    timeout: ${CURL_TIMEOUT}000
+}, (res) => {
+    let data = '';
+    res.on('data', (c) => data += c);
+    res.on('end', () => {
+        try {
+            const j = JSON.parse(data);
+            if (j.choices) process.stdout.write(j.choices[0].message.content);
+            else { console.error('API error:', j.error?.message || 'unknown'); process.exit(1); }
+        } catch(e) { console.error('Parse error:', e.message); process.exit(1); }
+    });
+});
+req.on('error', (e) => { console.error('Request error:', e.message); process.exit(1); });
+req.on('timeout', () => { req.destroy(); console.error('Timeout'); process.exit(1); });
+req.write(payload);
+req.end();
+" 2>&1)
+    local node_exit=$?
+    rm -f "$payloadfile"
 
-    if [[ $curl_exit -ne 0 ]]; then
-        echo "ERROR: OpenAI API call failed (curl exit $curl_exit)" >&2
+    if [[ $node_exit -ne 0 ]]; then
+        echo "ERROR: OpenAI API call failed: $result" >&2
         return 1
     fi
 
-    http_code=$(echo "$raw_response" | tail -1)
-    response_body=$(echo "$raw_response" | sed '$d')
-
-    if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]] 2>/dev/null; then
-        local err_msg
-        err_msg=$(echo "$response_body" | jq -r '.error.message // empty' 2>/dev/null)
-        echo "ERROR: OpenAI API returned HTTP $http_code: ${err_msg:-unknown error}" >&2
-        return 1
-    fi
-
-    parse_response "$response_body"
+    echo "$result"
 }
 
 # --- Main ---
