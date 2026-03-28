@@ -171,5 +171,36 @@ assert_contains "only newer file chunks" "4 chunks sent" "$output"
 rm -f "$TEST_DIR/.vector-watermark"
 
 echo ""
+echo "=== Failure Paths ==="
+
+# Test: malformed watermark treated as empty (not crash)
+echo "this is not json {{{" > "$TEST_DIR/.vector-watermark"
+output=$(DIGEST_DIR="$TEST_DIR" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1)
+assert_contains "malformed watermark: processes all files" "2 files" "$output"
+assert_contains "malformed watermark: all chunks sent" "7 chunks sent" "$output"
+rm -f "$TEST_DIR/.vector-watermark"
+
+# Test: zero-chunk file (no ## headings) does NOT advance watermark or count as processed
+cat > "$TEST_DIR/2026-03-22.md" << 'FIXTURE'
+# 2026-03-22 群聊摘要
+
+No section headings here, just plain text.
+Nothing to chunk.
+FIXTURE
+output=$(DIGEST_DIR="$TEST_DIR" DRY_RUN=true bash "$SCRIPT" --dry-run 2>&1)
+# 2026-03-22 has 0 chunks, 2026-03-23 has 3, 2026-03-24 has 4 = 7 chunks, 2 files
+assert_contains "zero-chunk: 7 chunks from real files" "7 chunks sent" "$output"
+assert_contains "zero-chunk: only 2 files counted" "2 files" "$output"
+rm "$TEST_DIR/2026-03-22.md"
+
+# Test: partial failure resume — watermark with partial state skips already-sent chunks
+echo '{"lastProcessed":"2026-03-27T00:00:00Z","lastDate":"2026-03-22","partial":{"file":"2026-03-23","sent":2}}' > "$TEST_DIR/.vector-watermark"
+output=$(DIGEST_DIR="$TEST_DIR" DRY_RUN=true bash "$SCRIPT" --dry-run --verbose 2>&1)
+# 2026-03-23 has 3 chunks, 2 already sent → 1 new; 2026-03-24 has 4 → total 5 chunks
+assert_contains "partial resume: 5 chunks sent" "5 chunks sent" "$output"
+assert_contains "partial resume: skip message" "Skip chunk" "$output"
+rm -f "$TEST_DIR/.vector-watermark"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

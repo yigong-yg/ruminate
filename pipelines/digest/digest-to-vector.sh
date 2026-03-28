@@ -19,6 +19,7 @@ VERBOSE="${VERBOSE:-false}"
 
 WATERMARK_FILE="${WATERMARK_FILE:-${DIGEST_DIR}/.vector-watermark}"
 LOG_FILE="${DIGEST_DIR}/.vector-log"
+CURL_TIMEOUT="${CURL_TIMEOUT:-30}"
 
 # --- Logging ---
 log() {
@@ -28,19 +29,52 @@ log() {
 log_verbose() { [[ "$VERBOSE" == "true" ]] && echo "$*" >&2 || true; }
 
 # --- Watermark ---
+# Reads lastDate from watermark. Returns "" on missing/corrupt file.
 read_watermark() {
     if [[ -f "$WATERMARK_FILE" ]]; then
-        jq -r '.lastDate // ""' "$WATERMARK_FILE"
+        jq -r '.lastDate // ""' "$WATERMARK_FILE" 2>/dev/null || { log "WARN: corrupt watermark, treating as empty"; echo ""; }
     else
         echo ""
     fi
 }
 
-write_watermark() {
-    local date="$1"
-    jq -n --arg date "$date" --arg ts "$(date -Iseconds)" \
-        '{lastProcessed: $ts, lastDate: $date}' > "$WATERMARK_FILE"
+# Reads partial chunk progress for a specific file. Returns 0 if no partial state.
+read_partial_sent() {
+    local file="$1"
+    if [[ -f "$WATERMARK_FILE" ]]; then
+        local pfile
+        pfile=$(jq -r '.partial.file // ""' "$WATERMARK_FILE" 2>/dev/null) || { echo "0"; return; }
+        if [[ "$pfile" == "$file" ]]; then
+            jq -r '.partial.sent // 0' "$WATERMARK_FILE" 2>/dev/null || echo "0"
+        else
+            echo "0"
+        fi
+    else
+        echo "0"
+    fi
 }
+
+# Atomic write: temp file + rename. Optionally includes partial state.
+save_watermark() {
+    local last_date="$1"
+    local partial_file="${2:-}"
+    local partial_sent="${3:-0}"
+    local tmpfile="${WATERMARK_FILE}.tmp"
+
+    if [[ -n "$partial_file" ]]; then
+        jq -n --arg date "$last_date" --arg ts "$(date -Iseconds)" \
+            --arg pfile "$partial_file" --argjson psent "$partial_sent" \
+            '{lastProcessed: $ts, lastDate: $date, partial: {file: $pfile, sent: $psent}}' \
+            > "$tmpfile"
+    else
+        jq -n --arg date "$last_date" --arg ts "$(date -Iseconds)" \
+            '{lastProcessed: $ts, lastDate: $date}' > "$tmpfile"
+    fi
+    mv "$tmpfile" "$WATERMARK_FILE"
+}
+
+# Backward-compatible alias used by tests
+write_watermark() { save_watermark "$1"; }
 
 # --- Chunking ---
 # Splits a markdown file by ## headings.
@@ -106,26 +140,40 @@ post_chunk() {
         return 0
     fi
 
-    # Write payload to temp file for curl — avoids Windows UTF-8 corruption
-    # when passing CJK content via -d "$string"
+    # Write payload to temp file — avoids Windows/Git Bash UTF-8 corruption
+    # when passing CJK content via curl -d "$string"
     local tmpfile
     tmpfile=$(mktemp)
     echo "$payload" > "$tmpfile"
 
-    local response
-    response=$(curl -s -X POST "${ALMA_BASE_URL}/api/memories" \
+    # Capture both body and HTTP status code; enforce timeout
+    local raw_response http_code response_body
+    raw_response=$(curl -s -w '\n%{http_code}' --max-time "$CURL_TIMEOUT" \
+        -X POST "${ALMA_BASE_URL}/api/memories" \
         -H "Content-Type: application/json" \
-        -d @"$tmpfile" 2>&1) || {
-        rm -f "$tmpfile"
-        log "WARN: POST connection failed for $date"
-        return 1
-    }
+        -d @"$tmpfile" 2>&1)
+    local curl_exit=$?
     rm -f "$tmpfile"
 
-    local error
-    error=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
-    if [[ -n "$error" ]]; then
-        log "WARN: POST rejected for $date: $error"
+    if [[ $curl_exit -ne 0 ]]; then
+        log "WARN: POST failed for $date (curl exit $curl_exit)"
+        return 1
+    fi
+
+    http_code=$(echo "$raw_response" | tail -1)
+    response_body=$(echo "$raw_response" | sed '$d')
+
+    # Check HTTP status
+    if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]] 2>/dev/null; then
+        log "WARN: POST failed for $date: HTTP $http_code"
+        return 1
+    fi
+
+    # Validate response is JSON with an id (Alma's success shape)
+    local id
+    id=$(echo "$response_body" | jq -r '.id // empty' 2>/dev/null)
+    if [[ -z "$id" ]]; then
+        log "WARN: POST for $date returned unexpected response (no .id in body)"
         return 1
     fi
 }
@@ -155,35 +203,62 @@ main() {
 
         filename=$(basename "$file" .md)
 
-        # Skip files at or before watermark (lexicographic YYYY-MM-DD compare)
-        if [[ -n "$last_date" && ! "$filename" > "$last_date" ]]; then
+        # Check for partial resume state for this file
+        local skip_count
+        skip_count=$(read_partial_sent "$filename")
+
+        # Skip fully-processed files (at or before watermark, no partial state)
+        if [[ -n "$last_date" && ! "$filename" > "$last_date" && "$skip_count" -eq 0 ]]; then
             log_verbose "Skip $filename (watermark=$last_date)"
             continue
         fi
 
         log_verbose "Processing $filename..."
+        [[ "$skip_count" -gt 0 ]] && log_verbose "  Resuming from chunk $skip_count"
 
-        local file_failed=0
+        local chunk_index=0
+        local file_chunks_sent=0
+        local file_failed=false
+
         while IFS= read -r -d $'\x1e' chunk; do
             [[ -z "$chunk" ]] && continue
+
+            # Skip chunks already sent in a previous partial run
+            if [[ $chunk_index -lt $skip_count ]]; then
+                log_verbose "  Skip chunk $chunk_index (already sent)"
+                chunk_index=$((chunk_index + 1))
+                continue
+            fi
+
             if post_chunk "$filename" "$chunk"; then
+                file_chunks_sent=$((file_chunks_sent + 1))
                 chunks_sent=$((chunks_sent + 1))
             else
-                file_failed=$((file_failed + 1))
+                chunks_failed=$((chunks_failed + 1))
+                # Save partial progress: record how many chunks are done
+                if [[ "$DRY_RUN" != "true" ]]; then
+                    save_watermark "$last_date" "$filename" "$chunk_index"
+                fi
+                file_failed=true
+                log "WARN: $filename chunk $chunk_index failed, stopping file"
+                break
             fi
+            chunk_index=$((chunk_index + 1))
         done < <(chunk_markdown "$file")
 
-        chunks_failed=$((chunks_failed + file_failed))
-        files_processed=$((files_processed + 1))
+        local total_file_chunks=$((skip_count + file_chunks_sent))
 
-        if [[ "$file_failed" -eq 0 ]]; then
-            log "Processed $filename"
+        if [[ "$file_failed" == false && $total_file_chunks -gt 0 ]]; then
+            files_processed=$((files_processed + 1))
+            last_date="$filename"
             if [[ "$DRY_RUN" != "true" ]]; then
-                write_watermark "$filename"
+                save_watermark "$filename"
             fi
-        else
-            log "WARN: $filename had $file_failed failed chunks, watermark not advanced"
+            log "Processed $filename ($total_file_chunks chunks)"
+        elif [[ "$file_failed" == false && $total_file_chunks -eq 0 ]]; then
+            log "WARN: $filename had no chunks, skipping"
         fi
+        # file_failed == true: partial state already saved, move to next file
     done
 
     echo "$files_processed files, $chunks_sent chunks sent, $chunks_failed failed"
