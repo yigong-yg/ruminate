@@ -158,7 +158,8 @@ query_memory() {
     local query="$1"
     local tmpfile
     tmpfile=$(mktemp)
-    jq -n --arg q "$query" '{query: $q}' > "$tmpfile"
+    # Pipe query through stdin — jq 1.6 on Windows crashes on CJK in --arg
+    printf '%s' "$query" | jq -Rs '{query: .}' > "$tmpfile"
 
     local response
     response=$(curl -s --max-time "$MEMORY_TIMEOUT" \

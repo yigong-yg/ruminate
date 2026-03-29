@@ -334,6 +334,21 @@ else
 fi
 
 echo ""
+echo "=== CJK query_memory regression ==="
+
+# Test: query_memory builds valid JSON from CJK query string
+# This exercises the real jq path — jq 1.6 on Windows crashes on CJK in --arg.
+# The fix pipes CJK through stdin instead. This test catches the regression.
+cjk_tmpfile=$(mktemp)
+printf '%s' "未完成事项和待办" | jq -Rs '{query: .}' > "$cjk_tmpfile" 2>/dev/null
+cjk_exit=$?
+assert_eq "jq builds valid JSON from CJK query" "0" "$cjk_exit"
+cjk_payload=$(cat "$cjk_tmpfile")
+assert_contains "CJK query payload has query field" "query" "$cjk_payload"
+assert_contains "CJK preserved in payload" "未完成" "$cjk_payload"
+rm -f "$cjk_tmpfile"
+
+echo ""
 echo "=== Missing API Key in .env ==="
 
 # Test: .env exists but has no OPENAI_API_KEY — dry-run must still work
