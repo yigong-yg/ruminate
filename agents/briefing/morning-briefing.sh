@@ -31,9 +31,68 @@ DRY_RUN="${DRY_RUN:-false}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-60}"
 MEMORY_TIMEOUT="${MEMORY_TIMEOUT:-10}"
 PROMPT_TEMPLATE="${SCRIPT_DIR}/prompt.md"
+BRIEFING_OUTPUT_DIR="${BRIEFING_OUTPUT_DIR:-$HOME/.config/alma/memory/briefings}"
 
 # --- Logging ---
 log_warn() { echo "[WARN] $*" >&2; }
+
+# Build the list of digest filenames used (for provenance).
+# Returns comma-separated basenames, newest first.
+list_digest_names() {
+    local n="${1:-$BRIEFING_DAYS}"
+    local files=()
+    for f in "$DIGEST_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        files+=("$f")
+    done
+    if [[ ${#files[@]} -eq 0 ]]; then echo ""; return; fi
+    printf '%s\n' "${files[@]}" | sort -r | head -n "$n" | while IFS= read -r f; do
+        basename "$f"
+    done | paste -sd', '
+}
+
+# Build provenance header block.
+build_provenance() {
+    local model="$1"
+    local days="$2"
+    local digest_names="$3"
+    local memory_status="$4"
+
+    printf '<!-- briefing-meta\ngenerated_at: %s\nmodel: %s\ndays: %s\ndigests: %s\nmemory: %s\n-->\n' \
+        "$(date -Iseconds)" "$model" "$days" "$digest_names" "$memory_status"
+}
+
+# Write artifact atomically: temp file in target dir, then rename.
+# Returns 0 on success, 1 on failure. Never leaves partial files.
+write_artifact() {
+    local content="$1"
+    local output_path="$2"
+    local output_dir
+    output_dir=$(dirname "$output_path")
+
+    mkdir -p "$output_dir" || {
+        echo "ERROR: Cannot create output directory $output_dir" >&2
+        return 1
+    }
+
+    local tmpfile
+    tmpfile=$(mktemp "${output_dir}/.briefing-XXXXXX") || {
+        echo "ERROR: Cannot create temp file in $output_dir" >&2
+        return 1
+    }
+
+    echo "$content" > "$tmpfile" || {
+        rm -f "$tmpfile"
+        echo "ERROR: Failed to write briefing content" >&2
+        return 1
+    }
+
+    mv "$tmpfile" "$output_path" || {
+        rm -f "$tmpfile"
+        echo "ERROR: Failed to rename artifact to $output_path" >&2
+        return 1
+    }
+}
 
 # --- Context Gathering ---
 
@@ -296,7 +355,26 @@ main() {
         exit 1
     fi
 
-    echo "$briefing"
+    # 4. Build provenance and write artifact
+    local digest_names
+    digest_names=$(list_digest_names "$BRIEFING_DAYS")
+
+    local memory_status="unavailable"
+    [[ -n "$memory_results" ]] && memory_status="available"
+
+    local provenance
+    provenance=$(build_provenance "$BRIEFING_MODEL" "$BRIEFING_DAYS" "$digest_names" "$memory_status")
+
+    local today
+    today=$(date +%Y-%m-%d)
+    local output_path="${BRIEFING_OUTPUT_DIR}/${today}.md"
+
+    local full_content="${provenance}
+${briefing}"
+
+    write_artifact "$full_content" "$output_path" || exit 1
+
+    echo "Briefing written to $output_path" >&2
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
