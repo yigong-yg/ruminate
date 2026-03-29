@@ -250,7 +250,90 @@ write_youtube_artifact() {
     mv "$tmpfile" "$output_path" || { rm -f "$tmpfile"; echo "ERROR: Rename failed" >&2; return 1; }
 }
 
-# Only run main when executed directly
+# --- Main ---
+main() {
+    local url=""
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) DRY_RUN=true ;;
+            *) [[ -z "$url" ]] && url="$arg" ;;
+        esac
+    done
+
+    if [[ -z "$url" ]]; then
+        echo "Usage: youtube-ingest.sh <youtube-url> [--dry-run]" >&2
+        exit 1
+    fi
+
+    # Preflight
+    if ! command -v yt-dlp > /dev/null 2>&1; then
+        echo "ERROR: yt-dlp not found on PATH. Install with: pip install yt-dlp" >&2
+        exit 1
+    fi
+
+    # Create temp working directory
+    local work_dir
+    work_dir=$(mktemp -d)
+    trap "rm -rf '$work_dir'" EXIT
+
+    # Step 1: Extract metadata
+    echo "Fetching metadata..." >&2
+    local json_file="$work_dir/meta.json"
+    yt-dlp --dump-json --no-warnings "$url" > "$json_file" 2>/dev/null || {
+        echo "ERROR: yt-dlp failed to fetch metadata for $url" >&2
+        exit 1
+    }
+
+    eval "$(extract_metadata "$json_file")"
+    echo "Video: $TITLE ($VIDEO_ID, ${DURATION}s)" >&2
+
+    # Step 2: Detect transcript source
+    local transcript_source
+    transcript_source=$(detect_transcript_source "$json_file")
+
+    if [[ "$transcript_source" == "none" ]]; then
+        echo "ERROR: No subtitles available for $VIDEO_ID." >&2
+        echo "This video has no official or auto-generated captions." >&2
+        echo "Whisper transcription is out of scope for MVP." >&2
+        exit 1
+    fi
+
+    # Step 3: Download subtitles
+    echo "Downloading $transcript_source subtitles..." >&2
+    local sub_args=("--skip-download" "-P" "$work_dir" "--no-warnings" "-o" "%(id)s")
+    if [[ "$transcript_source" == "official" ]]; then
+        sub_args=("--write-subs" "--sub-langs" "en" "${sub_args[@]}")
+    else
+        sub_args=("--write-auto-subs" "--sub-langs" "en" "${sub_args[@]}")
+    fi
+    yt-dlp "${sub_args[@]}" "$url" > /dev/null 2>&1 || true
+
+    # Find the VTT file
+    local vtt_file
+    vtt_file=$(find "$work_dir" -name "*.vtt" -type f | head -1)
+    if [[ -z "$vtt_file" || ! -f "$vtt_file" ]]; then
+        echo "ERROR: Failed to download subtitles for $VIDEO_ID" >&2
+        exit 1
+    fi
+
+    # Step 4: Build canonical artifact
+    echo "Building canonical artifact..." >&2
+    local artifact
+    artifact=$(build_artifact "$json_file" "$vtt_file" "$transcript_source")
+
+    # Step 5: Output
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "--- DRY-RUN: canonical artifact for $VIDEO_ID ---"
+        echo ""
+        echo "$artifact"
+        return 0
+    fi
+
+    local output_path="${YOUTUBE_OUTPUT_DIR}/${VIDEO_ID}.md"
+    write_youtube_artifact "$artifact" "$output_path" || exit 1
+    echo "Artifact written to $output_path" >&2
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "youtube-ingest: not yet fully implemented"
+    main "$@"
 fi

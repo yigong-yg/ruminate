@@ -301,5 +301,102 @@ assert_contains "artifact has content" "test content" "$yt_content"
 rm -rf "$yt_out"
 
 echo ""
+echo "=== Main Pipeline ==="
+
+# Create mock yt-dlp
+MOCK_YTDLP_DIR=$(mktemp -d)
+cat > "$MOCK_YTDLP_DIR/yt-dlp" << MOCKSCRIPT
+#!/bin/bash
+# Detect which mode yt-dlp is being called in
+if echo "\$@" | grep -q -- '--dump-json'; then
+    cat "$TEST_DIR/metadata.json"
+elif echo "\$@" | grep -q -- '--write-subs\|--write-auto-subs'; then
+    # Find the -P argument for output directory
+    outdir=""
+    prev=""
+    for arg in "\$@"; do
+        if [[ "\$prev" == "-P" ]]; then outdir="\$arg"; fi
+        prev="\$arg"
+    done
+    [[ -z "\$outdir" ]] && outdir="/tmp"
+    cp "$TEST_DIR/subs.vtt" "\$outdir/dQw4w9WgXcQ.en.vtt" 2>/dev/null || true
+fi
+MOCKSCRIPT
+chmod +x "$MOCK_YTDLP_DIR/yt-dlp"
+
+# Test: dry-run outputs artifact to stdout
+output_dir="$TEST_DIR/dry_output"
+output=$(PATH="$MOCK_YTDLP_DIR:$PATH" YOUTUBE_OUTPUT_DIR="$output_dir" DRY_RUN=true \
+    bash "$SCRIPT" "https://youtube.com/watch?v=dQw4w9WgXcQ" --dry-run 2>&1)
+assert_contains "dry-run shows DRY-RUN" "DRY-RUN" "$output"
+assert_contains "dry-run has frontmatter" "schema_version" "$output"
+assert_contains "dry-run has video_id" "dQw4w9WgXcQ" "$output"
+
+# Test: dry-run does NOT write artifact
+TOTAL=$((TOTAL + 1))
+if [[ ! -d "$output_dir" ]] || [[ $(find "$output_dir" -name '*.md' 2>/dev/null | wc -l) -eq 0 ]]; then
+    echo "  PASS: dry-run writes no artifact"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: dry-run wrote artifact"; FAIL=$((FAIL + 1))
+fi
+
+# Test: non-dry-run writes artifact at {video-id}.md
+output_dir2="$TEST_DIR/real_output"
+PATH="$MOCK_YTDLP_DIR:$PATH" YOUTUBE_OUTPUT_DIR="$output_dir2" \
+    bash "$SCRIPT" "https://youtube.com/watch?v=dQw4w9WgXcQ" 2>/dev/null
+TOTAL=$((TOTAL + 1))
+if [[ -f "$output_dir2/dQw4w9WgXcQ.md" ]]; then
+    echo "  PASS: artifact created at video-id.md"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: no artifact at $output_dir2/dQw4w9WgXcQ.md"; FAIL=$((FAIL + 1))
+fi
+art=$(cat "$output_dir2/dQw4w9WgXcQ.md" 2>/dev/null || echo "")
+assert_contains "artifact has transcript" "strangers to love" "$art"
+assert_contains "artifact has frontmatter" "youtube_canonical" "$art"
+
+# Test: no subs → fail with message
+cat > "$MOCK_YTDLP_DIR/yt-dlp" << MOCKSCRIPT_NOSUB
+#!/bin/bash
+if echo "\$@" | grep -q -- '--dump-json'; then
+    cat "$TEST_DIR/metadata_no_subs.json"
+fi
+MOCKSCRIPT_NOSUB
+chmod +x "$MOCK_YTDLP_DIR/yt-dlp"
+
+nosub_output=$(PATH="$MOCK_YTDLP_DIR:$PATH" YOUTUBE_OUTPUT_DIR="$TEST_DIR/nosub_out" \
+    bash "$SCRIPT" "https://youtube.com/watch?v=nosubs999" 2>&1) || true
+assert_contains "no subs error" "No subtitles" "$nosub_output"
+
+# Test: idempotency — run twice, second overwrites
+# Restore working mock first
+cat > "$MOCK_YTDLP_DIR/yt-dlp" << MOCKSCRIPT_OK
+#!/bin/bash
+if echo "\$@" | grep -q -- '--dump-json'; then
+    cat "$TEST_DIR/metadata.json"
+elif echo "\$@" | grep -q -- '--write-subs\|--write-auto-subs'; then
+    outdir=""
+    prev=""
+    for arg in "\$@"; do
+        if [[ "\$prev" == "-P" ]]; then outdir="\$arg"; fi
+        prev="\$arg"
+    done
+    [[ -z "\$outdir" ]] && outdir="/tmp"
+    cp "$TEST_DIR/subs.vtt" "\$outdir/dQw4w9WgXcQ.en.vtt" 2>/dev/null || true
+fi
+MOCKSCRIPT_OK
+chmod +x "$MOCK_YTDLP_DIR/yt-dlp"
+
+PATH="$MOCK_YTDLP_DIR:$PATH" YOUTUBE_OUTPUT_DIR="$output_dir2" \
+    bash "$SCRIPT" "https://youtube.com/watch?v=dQw4w9WgXcQ" 2>/dev/null
+TOTAL=$((TOTAL + 1))
+if [[ -f "$output_dir2/dQw4w9WgXcQ.md" ]]; then
+    echo "  PASS: idempotent overwrite works"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: idempotent overwrite failed"; FAIL=$((FAIL + 1))
+fi
+
+rm -rf "$MOCK_YTDLP_DIR" "$output_dir" "$output_dir2"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
