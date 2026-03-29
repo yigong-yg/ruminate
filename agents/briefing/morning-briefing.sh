@@ -152,12 +152,12 @@ gather_digests() {
     echo "$content"
 }
 
-# Query Alma vector memory. Returns formatted results or empty string on failure.
+# Query Alma vector memory. Returns formatted results on stdout.
+# Exit code: 0 = search succeeded (results may be empty), 1 = search failed.
 query_memory() {
     local query="$1"
     local tmpfile
     tmpfile=$(mktemp)
-    # Build JSON safely with jq
     jq -n --arg q "$query" '{query: $q}' > "$tmpfile"
 
     local response
@@ -167,23 +167,29 @@ query_memory() {
         -d @"$tmpfile" 2>/dev/null) || {
         rm -f "$tmpfile"
         log_warn "memory query failed (network): $query"
-        echo ""
-        return
+        return 1
     }
     rm -f "$tmpfile"
 
+    # Validate response has .results array (distinguishes success from error body)
+    if ! echo "$response" | jq -e '.results' > /dev/null 2>&1; then
+        log_warn "memory query failed (no .results in response): $query"
+        return 1
+    fi
+
     # Extract top results, format as bullet points
     local results
-    results=$(echo "$response" | jq -r '.results[:5][] | "- " + (.content // "" | split("\n") | .[0])' 2>/dev/null) || {
-        log_warn "memory query failed (parse): $query"
-        echo ""
-        return
-    }
+    results=$(echo "$response" | jq -r '.results[:5][] | "- " + (.content // "" | split("\n") | .[0])' 2>/dev/null) || true
     echo "$results"
+    return 0
 }
 
 # Run all memory queries and combine results.
-# Writes status to $MEMORY_STATUS_FILE: "unavailable", "empty", or "available".
+# Writes status to $MEMORY_STATUS_FILE:
+#   "unavailable" — can't reach Alma at all
+#   "degraded"    — status endpoint reachable but search calls failed
+#   "empty"       — search succeeded, zero matches
+#   "available"   — search succeeded, results found
 # (Must use file because this runs in a command substitution subshell.)
 gather_memory() {
     local status="unavailable"
@@ -196,21 +202,34 @@ gather_memory() {
         return
     fi
 
-    status="empty"  # reachable but no results yet
     local all_results=""
+    local any_succeeded=false
     local queries=("未完成事项和待办" "重要决策和变更" "风险和阻塞和异常")
 
     for q in "${queries[@]}"; do
         local result
-        result=$(query_memory "$q")
-        if [[ -n "$result" ]]; then
-            status="available"
-            all_results="${all_results}
+        if result=$(query_memory "$q"); then
+            # query_memory returned 0 = search call succeeded
+            any_succeeded=true
+            if [[ -n "$result" ]]; then
+                status="available"
+                all_results="${all_results}
 Query: ${q}
 ${result}
 "
+            fi
         fi
+        # query_memory returned 1 = search call failed, skip this query
     done
+
+    # Determine final status
+    if [[ "$status" != "available" ]]; then
+        if [[ "$any_succeeded" == true ]]; then
+            status="empty"  # at least one search succeeded, just no matches
+        else
+            status="degraded"  # status reachable but all searches failed
+        fi
+    fi
 
     [[ -n "$MEMORY_STATUS_FILE" ]] && echo "$status" > "$MEMORY_STATUS_FILE"
     echo "$all_results"

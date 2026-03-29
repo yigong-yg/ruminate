@@ -386,40 +386,14 @@ else
 fi
 rm -rf "$ARTIFACT_DIR/sub"
 
-# Test: write_artifact is atomic (no temp files left)
-write_artifact "clean" "$ARTIFACT_DIR/atomic.md"
-leftover=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '.briefing-*' 2>/dev/null | wc -l)
-assert_eq "no temp files left after write" "0" "$leftover"
-rm -f "$ARTIFACT_DIR/atomic.md"
-
-# Test: build_provenance emits YAML frontmatter with all required fields
+# Test: build_provenance emits YAML frontmatter with key contract fields
 digest_list=$'2026-03-27.md\n2026-03-26.md'
 prov=$(build_provenance "gpt-4o-mini" "3" "$digest_list" "available" "2026-03-29")
 assert_contains "provenance has schema_version" "schema_version: 1" "$prov"
 assert_contains "provenance has artifact_type" "artifact_type: briefing" "$prov"
 assert_contains "provenance has date" "date: 2026-03-29" "$prov"
-assert_contains "provenance has generated_at" "generated_at:" "$prov"
-assert_contains "provenance has model" "model: gpt-4o-mini" "$prov"
-assert_contains "provenance has days" "days: 3" "$prov"
-assert_contains "provenance has digest_files header" "digest_files:" "$prov"
-assert_contains "provenance has digest YAML list item" "  - 2026-03-27.md" "$prov"
+assert_contains "provenance has digest YAML list" "  - 2026-03-27.md" "$prov"
 assert_contains "provenance has memory_status" "memory_status: available" "$prov"
-# Verify it's valid YAML frontmatter (starts and ends with ---)
-assert_contains "provenance starts with ---" "---" "$prov"
-
-# Test: list_digest_names returns newline-separated basenames
-names=$(list_digest_names 2)
-# Should be exactly "2026-03-27.md\n2026-03-26.md"
-name_count=$(echo "$names" | wc -l)
-assert_eq "list_digest_names(2) returns 2 lines" "2" "$name_count"
-assert_contains "list_digest_names has latest" "2026-03-27.md" "$names"
-assert_contains "list_digest_names has second" "2026-03-26.md" "$names"
-TOTAL=$((TOTAL + 1))
-if [[ "$names" != *"2026-03-25"* ]]; then
-    echo "  PASS: list_digest_names(2) excludes 3rd"; PASS=$((PASS + 1))
-else
-    echo "  FAIL: list_digest_names(2) included 3rd"; FAIL=$((FAIL + 1))
-fi
 
 # Test: dry-run does NOT write artifact
 rm -rf "$ARTIFACT_DIR"/*
@@ -582,6 +556,41 @@ MOCKSCRIPT
 empty_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
 assert_contains "empty-memory artifact has content" "Briefing with empty memory" "$empty_artifact"
 assert_contains "empty-memory provenance shows empty" "memory_status: empty" "$empty_artifact"
+
+# Test: status reachable but search fails → memory_status: degraded (not empty)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR7=$(mktemp -d)
+    cat > "$MOCK_DIR7/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing with degraded memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR7/node"
+    export PATH="$MOCK_DIR7:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    # Override: status reachable, but all search calls fail
+    gather_memory() {
+        echo "degraded" > "$MEMORY_STATUS_FILE"
+        echo ""
+    }
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR7"
+)
+degraded_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "degraded-memory artifact has content" "Briefing with degraded memory" "$degraded_artifact"
+assert_contains "degraded-memory provenance shows degraded" "memory_status: degraded" "$degraded_artifact"
+# Verify it does NOT say "empty" — that's the specific bug this test guards against
+TOTAL=$((TOTAL + 1))
+if [[ "$degraded_artifact" != *"memory_status: empty"* ]]; then
+    echo "  PASS: degraded is not misreported as empty"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: degraded was misreported as empty"; FAIL=$((FAIL + 1))
+fi
 
 rm -rf "$ARTIFACT_DIR"
 

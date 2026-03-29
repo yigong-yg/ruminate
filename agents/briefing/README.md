@@ -73,7 +73,8 @@ memory_status: available
 
 `memory_status` values:
 - `available` — Alma reachable, search returned results
-- `empty` — Alma reachable, search returned zero matches
+- `empty` — Alma reachable, search succeeded with zero matches
+- `degraded` — Alma status endpoint reachable but search calls failed
 - `unavailable` — Alma not reachable
 
 The frontmatter is versioned via `schema_version`. Field semantics may change across schema versions.
