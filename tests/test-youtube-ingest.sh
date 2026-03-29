@@ -227,5 +227,36 @@ src_none=$(detect_transcript_source "$TEST_DIR/metadata_no_subs.json")
 assert_eq "no subs detected" "none" "$src_none"
 
 echo ""
+echo "=== Chapter Detection ==="
+
+# Test: extract_chapters returns chapters from metadata
+chapters=$(extract_chapters "$TEST_DIR/metadata.json")
+chapter_count=$(echo "$chapters" | jq 'length')
+assert_eq "3 chapters from metadata" "3" "$chapter_count"
+first_title=$(echo "$chapters" | jq -r '.[0].title')
+assert_eq "first chapter title" "Intro" "$first_title"
+
+# Test: extract_chapters generates time segments when no chapters
+segments=$(extract_chapters "$TEST_DIR/metadata_no_chapters.json")
+seg_count=$(echo "$segments" | jq 'length')
+# 720s / 300s = 2.4 → 3 segments (0-300, 300-600, 600-720)
+assert_eq "time segments for 12min video" "3" "$seg_count"
+first_seg_title=$(echo "$segments" | jq -r '.[0].title')
+assert_contains "time segment has range" "00:00" "$first_seg_title"
+
+echo ""
+echo "=== Transcript Segmenting ==="
+
+# Test: segment_transcript splits cleaned text by chapter time ranges
+chapters_json=$(extract_chapters "$TEST_DIR/metadata.json")
+seg_text=$(segment_transcript "$TEST_DIR/subs.vtt" "$chapters_json")
+# Should have 3 segments separated by ---SEGMENT---
+seg_parts=$(echo "$seg_text" | grep -c -- '---SEGMENT---' || echo "0")
+assert_eq "3 chapters = 2 segment delimiters" "2" "$seg_parts"
+# First segment (0-60s) should contain "strangers to love"
+first_seg=$(echo "$seg_text" | awk '/---SEGMENT---/{exit} {print}')
+assert_contains "first segment has intro text" "strangers to love" "$first_seg"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

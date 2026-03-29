@@ -78,6 +78,98 @@ detect_transcript_source() {
     echo "none"
 }
 
+# --- Chapter Detection ---
+# Returns JSON array of {start_time, end_time, title}.
+# Uses yt-dlp chapters if available, else generates time-based segments.
+extract_chapters() {
+    local json_file="$1"
+
+    local has_chapters
+    has_chapters=$(jq -r 'if .chapters then (.chapters | length) else 0 end' "$json_file")
+
+    if [[ "$has_chapters" -gt 0 ]]; then
+        jq '.chapters' "$json_file"
+        return
+    fi
+
+    # Generate time-based segments
+    local duration
+    duration=$(jq -r '.duration // 0' "$json_file")
+    local seg_seconds=$((SEGMENT_MINUTES * 60))
+
+    # Build segments array with jq
+    local segments="[]"
+    local start=0
+    while [[ $start -lt $duration ]]; do
+        local end=$((start + seg_seconds))
+        [[ $end -gt $duration ]] && end=$duration
+
+        # Format HH:MM:SS for title
+        local sh sm ss eh em es
+        sh=$(printf '%02d' $((start / 3600)))
+        sm=$(printf '%02d' $(((start % 3600) / 60)))
+        ss=$(printf '%02d' $((start % 60)))
+        eh=$(printf '%02d' $((end / 3600)))
+        em=$(printf '%02d' $(((end % 3600) / 60)))
+        es=$(printf '%02d' $((end % 60)))
+        local title="${sh}:${sm}:${ss} - ${eh}:${em}:${es}"
+
+        segments=$(echo "$segments" | jq \
+            --argjson s "$start" --argjson e "$end" --arg t "$title" \
+            '. + [{start_time: $s, end_time: $e, title: $t}]')
+
+        start=$end
+    done
+
+    echo "$segments"
+}
+
+# --- Transcript Segmenting ---
+# Reads VTT, assigns each caption line to a chapter by timestamp.
+# Returns text with ---SEGMENT--- delimiters between chapters.
+segment_transcript() {
+    local vtt_file="$1"
+    local chapters_json="$2"
+    local chapter_count
+    chapter_count=$(echo "$chapters_json" | jq 'length')
+
+    # Parse VTT: extract (timestamp_seconds, text) pairs
+    local timed_lines=""
+    local current_time=0
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^([0-9]{2}):([0-9]{2}):([0-9]{2}) ]]; then
+            local h="${BASH_REMATCH[1]}" m="${BASH_REMATCH[2]}" s="${BASH_REMATCH[3]}"
+            current_time=$(( 10#$h * 3600 + 10#$m * 60 + 10#$s ))
+        elif [[ -n "$line" && "$line" != "WEBVTT"* && "$line" != "Kind:"* && "$line" != "Language:"* && "$line" != "NOTE"* && "$line" != *"-->"* ]]; then
+            timed_lines="${timed_lines}${current_time}|${line}
+"
+        fi
+    done < "$vtt_file"
+
+    # Deduplicate by text content
+    timed_lines=$(echo "$timed_lines" | awk -F'|' '!seen[$2]++')
+
+    # Split into segments by chapter boundaries
+    local i=0
+    while [[ $i -lt $chapter_count ]]; do
+        local ch_start ch_end
+        ch_start=$(echo "$chapters_json" | jq -r ".[$i].start_time")
+        ch_end=$(echo "$chapters_json" | jq -r ".[$i].end_time")
+
+        [[ $i -gt 0 ]] && echo "---SEGMENT---"
+
+        echo "$timed_lines" | while IFS='|' read -r ts text; do
+            [[ -z "$ts" || -z "$text" ]] && continue
+            if [[ "$ts" -ge "$ch_start" && "$ts" -lt "$ch_end" ]]; then
+                echo "$text"
+            fi
+        done
+
+        i=$((i + 1))
+    done
+}
+
 # Only run main when executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "youtube-ingest: not yet fully implemented"
