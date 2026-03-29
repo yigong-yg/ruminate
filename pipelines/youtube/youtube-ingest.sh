@@ -170,6 +170,86 @@ segment_transcript() {
     done
 }
 
+# --- Canonical Artifact Builder ---
+build_artifact() {
+    local json_file="$1"
+    local vtt_file="$2"
+    local transcript_source="$3"
+
+    eval "$(extract_metadata "$json_file")"
+
+    local chapters_json
+    chapters_json=$(extract_chapters "$json_file")
+    local chapter_count
+    chapter_count=$(echo "$chapters_json" | jq 'length')
+
+    local segmented
+    segmented=$(segment_transcript "$vtt_file" "$chapters_json")
+
+    # Count words in transcript
+    local word_count
+    word_count=$(echo "$segmented" | sed 's/---SEGMENT---//g' | wc -w | tr -d '[:space:]')
+
+    # Build frontmatter
+    printf '%s\n' "---"
+    printf 'schema_version: 1\n'
+    printf 'artifact_type: youtube_canonical\n'
+    printf 'video_id: %s\n' "$VIDEO_ID"
+    printf 'title: %s\n' "$TITLE"
+    printf 'channel: %s\n' "$CHANNEL"
+    printf 'duration_seconds: %s\n' "$DURATION"
+    printf 'upload_date: %s\n' "$UPLOAD_DATE"
+    printf 'ingested_at: %s\n' "$(date -Iseconds)"
+    printf 'transcript_source: %s\n' "$transcript_source"
+    printf 'chapters: %s\n' "$chapter_count"
+    printf 'word_count: %s\n' "$word_count"
+    printf '%s\n' "---"
+
+    # Source description
+    printf '\n## Source Description\n\n%s\n' "$DESCRIPTION"
+
+    # Chapter sections
+    local i=0
+    # Split segmented text by ---SEGMENT--- delimiter
+    local IFS_BAK="$IFS"
+    local segments=()
+    local current_seg=""
+    while IFS= read -r line; do
+        if [[ "$line" == "---SEGMENT---" ]]; then
+            segments+=("$current_seg")
+            current_seg=""
+        else
+            [[ -n "$current_seg" ]] && current_seg="${current_seg}
+${line}" || current_seg="$line"
+        fi
+    done <<< "$segmented"
+    [[ -n "$current_seg" ]] && segments+=("$current_seg")
+    IFS="$IFS_BAK"
+
+    while [[ $i -lt $chapter_count ]]; do
+        local ch_title
+        ch_title=$(echo "$chapters_json" | jq -r ".[$i].title")
+        printf '\n## %s\n\n%s\n' "$ch_title" "${segments[$i]:-}"
+        i=$((i + 1))
+    done
+}
+
+# Atomic artifact write (temp+rename pattern from M3)
+write_youtube_artifact() {
+    local content="$1"
+    local output_path="$2"
+    local output_dir
+    output_dir=$(dirname "$output_path")
+
+    mkdir -p "$output_dir" || { echo "ERROR: Cannot create $output_dir" >&2; return 1; }
+
+    local tmpfile
+    tmpfile=$(mktemp "${output_dir}/.yt-ingest-XXXXXX") || { echo "ERROR: Cannot create temp file" >&2; return 1; }
+
+    printf '%s\n' "$content" > "$tmpfile" || { rm -f "$tmpfile"; echo "ERROR: Write failed" >&2; return 1; }
+    mv "$tmpfile" "$output_path" || { rm -f "$tmpfile"; echo "ERROR: Rename failed" >&2; return 1; }
+}
+
 # Only run main when executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "youtube-ingest: not yet fully implemented"

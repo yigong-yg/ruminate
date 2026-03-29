@@ -258,5 +258,48 @@ first_seg=$(echo "$seg_text" | awk '/---SEGMENT---/{exit} {print}')
 assert_contains "first segment has intro text" "strangers to love" "$first_seg"
 
 echo ""
+echo "=== Canonical Artifact ==="
+
+# Test: build_artifact produces correct frontmatter
+artifact=$(build_artifact "$TEST_DIR/metadata.json" "$TEST_DIR/subs.vtt" "official")
+assert_contains "frontmatter has schema_version" "schema_version: 1" "$artifact"
+assert_contains "frontmatter has artifact_type" "artifact_type: youtube_canonical" "$artifact"
+assert_contains "frontmatter has video_id" "video_id: dQw4w9WgXcQ" "$artifact"
+assert_contains "frontmatter has title" "title: Rick Astley" "$artifact"
+assert_contains "frontmatter has channel" "channel: Rick Astley" "$artifact"
+assert_contains "frontmatter has duration" "duration_seconds: 212" "$artifact"
+assert_contains "frontmatter has upload_date" "upload_date: 2009-10-25" "$artifact"
+assert_contains "frontmatter has transcript_source" "transcript_source: official" "$artifact"
+assert_contains "frontmatter has chapters count" "chapters: 3" "$artifact"
+
+# Test: artifact has chapter sections
+assert_contains "has chapter heading" "## Intro" "$artifact"
+assert_contains "has transcript text" "strangers to love" "$artifact"
+
+# Test: artifact has source description
+assert_contains "has source description" "Source Description" "$artifact"
+
+# Test: build_artifact works without chapters (time segments)
+artifact2=$(build_artifact "$TEST_DIR/metadata_no_chapters.json" "$TEST_DIR/subs_long.vtt" "official")
+assert_contains "no-chapters has time segment" "00:00" "$artifact2"
+assert_contains "no-chapters has transcript" "event sourcing" "$artifact2"
+
+echo ""
+echo "=== Atomic Write ==="
+
+# Test: write_youtube_artifact creates file
+yt_out="$TEST_DIR/yt_output"
+write_youtube_artifact "test content" "$yt_out/test123.md"
+TOTAL=$((TOTAL + 1))
+if [[ -f "$yt_out/test123.md" ]]; then
+    echo "  PASS: artifact file created"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: artifact not created"; FAIL=$((FAIL + 1))
+fi
+yt_content=$(cat "$yt_out/test123.md")
+assert_contains "artifact has content" "test content" "$yt_content"
+rm -rf "$yt_out"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
