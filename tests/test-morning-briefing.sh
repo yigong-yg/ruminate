@@ -392,16 +392,26 @@ leftover=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '.briefing-*' 2>/dev/null | wc
 assert_eq "no temp files left after write" "0" "$leftover"
 rm -f "$ARTIFACT_DIR/atomic.md"
 
-# Test: build_provenance includes expected fields
-prov=$(build_provenance "gpt-4o-mini" "3" "2026-03-27.md, 2026-03-26.md" "available")
+# Test: build_provenance emits YAML frontmatter with all required fields
+digest_list=$'2026-03-27.md\n2026-03-26.md'
+prov=$(build_provenance "gpt-4o-mini" "3" "$digest_list" "available" "2026-03-29")
+assert_contains "provenance has schema_version" "schema_version: 1" "$prov"
+assert_contains "provenance has artifact_type" "artifact_type: briefing" "$prov"
+assert_contains "provenance has date" "date: 2026-03-29" "$prov"
 assert_contains "provenance has generated_at" "generated_at:" "$prov"
 assert_contains "provenance has model" "model: gpt-4o-mini" "$prov"
 assert_contains "provenance has days" "days: 3" "$prov"
-assert_contains "provenance has digests" "2026-03-27.md" "$prov"
-assert_contains "provenance has memory status" "memory: available" "$prov"
+assert_contains "provenance has digest_files header" "digest_files:" "$prov"
+assert_contains "provenance has digest YAML list item" "  - 2026-03-27.md" "$prov"
+assert_contains "provenance has memory_status" "memory_status: available" "$prov"
+# Verify it's valid YAML frontmatter (starts and ends with ---)
+assert_contains "provenance starts with ---" "---" "$prov"
 
-# Test: list_digest_names returns basenames
+# Test: list_digest_names returns newline-separated basenames
 names=$(list_digest_names 2)
+# Should be exactly "2026-03-27.md\n2026-03-26.md"
+name_count=$(echo "$names" | wc -l)
+assert_eq "list_digest_names(2) returns 2 lines" "2" "$name_count"
 assert_contains "list_digest_names has latest" "2026-03-27.md" "$names"
 assert_contains "list_digest_names has second" "2026-03-26.md" "$names"
 TOTAL=$((TOTAL + 1))
@@ -444,10 +454,12 @@ else
     echo "  FAIL: no artifact at $ARTIFACT_DIR/${today}.md"; FAIL=$((FAIL + 1))
 fi
 
-# Verify artifact has provenance header
+# Verify artifact has YAML frontmatter provenance
 artifact_content=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
-assert_contains "artifact has provenance" "briefing-meta" "$artifact_content"
-assert_contains "artifact has model in provenance" "model:" "$artifact_content"
+assert_contains "artifact has YAML frontmatter" "schema_version: 1" "$artifact_content"
+assert_contains "artifact has artifact_type" "artifact_type: briefing" "$artifact_content"
+assert_contains "artifact has model in frontmatter" "model:" "$artifact_content"
+assert_contains "artifact has digest_files list" "digest_files:" "$artifact_content"
 assert_contains "artifact has briefing content" "Mock briefing content" "$artifact_content"
 
 # Test: synthesis failure leaves no artifact
@@ -540,7 +552,36 @@ MOCKSCRIPT
 )
 mem_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
 assert_contains "memory-down artifact has content" "Briefing without memory" "$mem_artifact"
-assert_contains "memory-down provenance shows unavailable" "memory: unavailable" "$mem_artifact"
+assert_contains "memory-down provenance shows unavailable" "memory_status: unavailable" "$mem_artifact"
+
+# Test: Alma reachable but zero results → memory_status: empty
+# Override gather_memory to simulate reachable-but-empty (no mock HTTP needed)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR6=$(mktemp -d)
+    cat > "$MOCK_DIR6/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing with empty memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR6/node"
+    export PATH="$MOCK_DIR6:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    # Override gather_memory: Alma reachable, zero matches
+    gather_memory() {
+        echo "empty" > "$MEMORY_STATUS_FILE"
+        echo ""
+    }
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR6"
+)
+empty_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "empty-memory artifact has content" "Briefing with empty memory" "$empty_artifact"
+assert_contains "empty-memory provenance shows empty" "memory_status: empty" "$empty_artifact"
 
 rm -rf "$ARTIFACT_DIR"
 

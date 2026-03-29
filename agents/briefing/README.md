@@ -53,19 +53,36 @@ Not implemented (and not planned for MVP):
 
 ## Provenance
 
-Each artifact starts with a provenance header:
+Each artifact starts with YAML frontmatter:
 
-```
-<!-- briefing-meta
+```yaml
+---
+schema_version: 1
+artifact_type: briefing
+date: 2026-03-29
 generated_at: 2026-03-29T08:00:00+00:00
 model: gpt-4o-mini
 days: 3
-digests: 2026-03-27.md, 2026-03-26.md, 2026-03-25.md
-memory: available
--->
+digest_files:
+  - 2026-03-27.md
+  - 2026-03-26.md
+  - 2026-03-25.md
+memory_status: available
+---
 ```
 
-This format is not guaranteed stable across versions.
+`memory_status` values:
+- `available` — Alma reachable, search returned results
+- `empty` — Alma reachable, search returned zero matches
+- `unavailable` — Alma not reachable
+
+The frontmatter is versioned via `schema_version`. Field semantics may change across schema versions.
+
+## Consumer Behavior
+
+Consumers of briefing artifacts should:
+- Read the latest dated file by filename sort (lexicographic on `YYYY-MM-DD.md`)
+- This job does not create alias artifacts, pointer files, or `latest.md` symlinks
 
 ## Usage
 

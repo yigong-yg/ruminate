@@ -36,8 +36,14 @@ BRIEFING_OUTPUT_DIR="${BRIEFING_OUTPUT_DIR:-$HOME/.config/alma/memory/briefings}
 # --- Logging ---
 log_warn() { echo "[WARN] $*" >&2; }
 
+# Memory status: written to MEMORY_STATUS_FILE by gather_memory() (which runs in
+# a command substitution subshell, so globals don't propagate). Read by main().
+# Values: "unavailable" (can't reach Alma), "empty" (reachable, zero matches),
+#         "available" (reachable, results found)
+MEMORY_STATUS_FILE=""
+
 # Build the list of digest filenames used (for provenance).
-# Returns comma-separated basenames, newest first.
+# Returns newline-separated basenames, newest first.
 list_digest_names() {
     local n="${1:-$BRIEFING_DAYS}"
     local files=()
@@ -48,18 +54,36 @@ list_digest_names() {
     if [[ ${#files[@]} -eq 0 ]]; then echo ""; return; fi
     printf '%s\n' "${files[@]}" | sort -r | head -n "$n" | while IFS= read -r f; do
         basename "$f"
-    done | paste -sd', '
+    done
 }
 
-# Build provenance header block.
+# Build YAML frontmatter provenance block.
 build_provenance() {
     local model="$1"
     local days="$2"
-    local digest_names="$3"
+    local digest_names="$3"  # newline-separated list
     local memory_status="$4"
+    local date="$5"
 
-    printf '<!-- briefing-meta\ngenerated_at: %s\nmodel: %s\ndays: %s\ndigests: %s\nmemory: %s\n-->\n' \
-        "$(date -Iseconds)" "$model" "$days" "$digest_names" "$memory_status"
+    local digest_yaml=""
+    if [[ -n "$digest_names" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && digest_yaml="${digest_yaml}  - ${name}
+"
+        done <<< "$digest_names"
+    fi
+
+    printf '%s\n' "---"
+    printf 'schema_version: 1\n'
+    printf 'artifact_type: briefing\n'
+    printf 'date: %s\n' "$date"
+    printf 'generated_at: %s\n' "$(date -Iseconds)"
+    printf 'model: %s\n' "$model"
+    printf 'days: %s\n' "$days"
+    printf 'digest_files:\n'
+    printf '%s' "$digest_yaml"
+    printf 'memory_status: %s\n' "$memory_status"
+    printf '%s\n' "---"
 }
 
 # Write artifact atomically: temp file in target dir, then rename.
@@ -81,7 +105,7 @@ write_artifact() {
         return 1
     }
 
-    echo "$content" > "$tmpfile" || {
+    printf '%s\n' "$content" > "$tmpfile" || {
         rm -f "$tmpfile"
         echo "ERROR: Failed to write briefing content" >&2
         return 1
@@ -159,14 +183,20 @@ query_memory() {
 }
 
 # Run all memory queries and combine results.
+# Writes status to $MEMORY_STATUS_FILE: "unavailable", "empty", or "available".
+# (Must use file because this runs in a command substitution subshell.)
 gather_memory() {
+    local status="unavailable"
+
     # Quick connectivity check before running all queries
     if ! curl -s --max-time 2 "${ALMA_BASE_URL}/api/memories/status" > /dev/null 2>&1; then
         log_warn "Alma not reachable at $ALMA_BASE_URL, skipping memory queries"
+        [[ -n "$MEMORY_STATUS_FILE" ]] && echo "$status" > "$MEMORY_STATUS_FILE"
         echo ""
         return
     fi
 
+    status="empty"  # reachable but no results yet
     local all_results=""
     local queries=("未完成事项和待办" "重要决策和变更" "风险和阻塞和异常")
 
@@ -174,6 +204,7 @@ gather_memory() {
         local result
         result=$(query_memory "$q")
         if [[ -n "$result" ]]; then
+            status="available"
             all_results="${all_results}
 Query: ${q}
 ${result}
@@ -181,6 +212,7 @@ ${result}
         fi
     done
 
+    [[ -n "$MEMORY_STATUS_FILE" ]] && echo "$status" > "$MEMORY_STATUS_FILE"
     echo "$all_results"
 }
 
@@ -328,8 +360,12 @@ main() {
     fi
 
     local memory_results=""
+    local memory_status="unavailable"
     if [[ "$DRY_RUN" != "true" ]]; then
+        MEMORY_STATUS_FILE=$(mktemp)
         memory_results=$(gather_memory) || true
+        memory_status=$(cat "$MEMORY_STATUS_FILE" 2>/dev/null || echo "unavailable")
+        rm -f "$MEMORY_STATUS_FILE"
     fi
 
     # 2. Assemble prompt
@@ -359,14 +395,12 @@ main() {
     local digest_names
     digest_names=$(list_digest_names "$BRIEFING_DAYS")
 
-    local memory_status="unavailable"
-    [[ -n "$memory_results" ]] && memory_status="available"
-
-    local provenance
-    provenance=$(build_provenance "$BRIEFING_MODEL" "$BRIEFING_DAYS" "$digest_names" "$memory_status")
-
     local today
     today=$(date +%Y-%m-%d)
+
+    local provenance
+    provenance=$(build_provenance "$BRIEFING_MODEL" "$BRIEFING_DAYS" "$digest_names" "$memory_status" "$today")
+
     local output_path="${BRIEFING_OUTPUT_DIR}/${today}.md"
 
     local full_content="${provenance}
