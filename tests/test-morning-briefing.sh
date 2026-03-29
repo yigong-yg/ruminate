@@ -358,5 +358,242 @@ assert_contains "missing key: clean error from call_openai" "OPENAI_API_KEY not 
 rm -rf "$env_dir"
 
 echo ""
+echo "=== Artifact Output ==="
+
+# Setup: source script for helper functions, create output dir
+ARTIFACT_DIR="$TEST_DIR/briefings"
+mkdir -p "$ARTIFACT_DIR"
+
+# Test: write_artifact creates file at expected path
+write_artifact "test content" "$ARTIFACT_DIR/test.md"
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/test.md" ]]; then
+    echo "  PASS: write_artifact creates file"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: write_artifact did not create file"; FAIL=$((FAIL + 1))
+fi
+result=$(cat "$ARTIFACT_DIR/test.md")
+assert_contains "artifact has content" "test content" "$result"
+rm -f "$ARTIFACT_DIR/test.md"
+
+# Test: write_artifact creates parent directories
+write_artifact "nested" "$ARTIFACT_DIR/sub/dir/test.md"
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/sub/dir/test.md" ]]; then
+    echo "  PASS: write_artifact creates parent dirs"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: write_artifact did not create parent dirs"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$ARTIFACT_DIR/sub"
+
+# Test: build_provenance emits YAML frontmatter with key contract fields
+digest_list=$'2026-03-27.md\n2026-03-26.md'
+prov=$(build_provenance "gpt-4o-mini" "3" "$digest_list" "available" "2026-03-29")
+assert_contains "provenance has schema_version" "schema_version: 1" "$prov"
+assert_contains "provenance has artifact_type" "artifact_type: briefing" "$prov"
+assert_contains "provenance has date" "date: 2026-03-29" "$prov"
+assert_contains "provenance has digest YAML list" "  - 2026-03-27.md" "$prov"
+assert_contains "provenance has memory_status" "memory_status: available" "$prov"
+
+# Test: dry-run does NOT write artifact
+rm -rf "$ARTIFACT_DIR"/*
+output=$(DIGEST_DIR="$TEST_DIR/digest" DRY_RUN=true BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR" \
+    bash "$SCRIPT" --dry-run 2>&1)
+leftover_dry=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+assert_eq "dry-run writes no artifact" "0" "$leftover_dry"
+
+# Test: non-dry-run with mocked synthesis writes artifact
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR2=$(mktemp -d)
+    cat > "$MOCK_DIR2/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Mock briefing content for artifact test"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR2/node"
+    export PATH="$MOCK_DIR2:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR2"
+)
+today=$(date +%Y-%m-%d)
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/${today}.md" ]]; then
+    echo "  PASS: non-dry-run creates dated artifact"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: no artifact at $ARTIFACT_DIR/${today}.md"; FAIL=$((FAIL + 1))
+fi
+
+# Verify artifact has YAML frontmatter provenance
+artifact_content=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "artifact has YAML frontmatter" "schema_version: 1" "$artifact_content"
+assert_contains "artifact has artifact_type" "artifact_type: briefing" "$artifact_content"
+assert_contains "artifact has model in frontmatter" "model:" "$artifact_content"
+assert_contains "artifact has digest_files list" "digest_files:" "$artifact_content"
+assert_contains "artifact has briefing content" "Mock briefing content" "$artifact_content"
+
+# Test: synthesis failure leaves no artifact
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR3=$(mktemp -d)
+    cat > "$MOCK_DIR3/node" << 'MOCKSCRIPT'
+#!/bin/bash
+exit 1
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR3/node"
+    export PATH="$MOCK_DIR3:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR3"
+) || true
+leftover_fail=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+assert_eq "synthesis failure leaves no artifact" "0" "$leftover_fail"
+
+# Test: BRIEFING_OUTPUT_DIR override works
+custom_dir="$TEST_DIR/custom_out"
+(
+    export BRIEFING_OUTPUT_DIR="$custom_dir"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR4=$(mktemp -d)
+    cat > "$MOCK_DIR4/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Custom dir briefing"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR4/node"
+    export PATH="$MOCK_DIR4:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR4"
+)
+TOTAL=$((TOTAL + 1))
+if [[ -f "$custom_dir/${today}.md" ]]; then
+    echo "  PASS: BRIEFING_OUTPUT_DIR override works"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: no artifact in custom dir $custom_dir"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$custom_dir"
+
+# Test: no digests produces no artifact
+empty_dir3=$(mktemp -d)
+artifact_dir_empty="$TEST_DIR/briefings_empty"
+(
+    export BRIEFING_OUTPUT_DIR="$artifact_dir_empty"
+    export DIGEST_DIR="$empty_dir3"
+    export OPENAI_API_KEY="test-key"
+    source "$SCRIPT"
+    main 2>/dev/null
+) || true
+if [[ -d "$artifact_dir_empty" ]]; then
+    leftover_nodigest=$(find "$artifact_dir_empty" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+else
+    leftover_nodigest=0
+fi
+assert_eq "no digests produces no artifact" "0" "$leftover_nodigest"
+rmdir "$empty_dir3" 2>/dev/null || true
+rm -rf "$artifact_dir_empty"
+
+# Test: memory unavailable still produces artifact (with provenance showing unavailable)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export ALMA_BASE_URL="http://localhost:1"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR5=$(mktemp -d)
+    cat > "$MOCK_DIR5/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing without memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR5/node"
+    export PATH="$MOCK_DIR5:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR5"
+)
+mem_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "memory-down artifact has content" "Briefing without memory" "$mem_artifact"
+assert_contains "memory-down provenance shows unavailable" "memory_status: unavailable" "$mem_artifact"
+
+# Test: Alma reachable but zero results → memory_status: empty
+# Override gather_memory to simulate reachable-but-empty (no mock HTTP needed)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR6=$(mktemp -d)
+    cat > "$MOCK_DIR6/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing with empty memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR6/node"
+    export PATH="$MOCK_DIR6:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    # Override gather_memory: Alma reachable, zero matches
+    gather_memory() {
+        echo "empty" > "$MEMORY_STATUS_FILE"
+        echo ""
+    }
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR6"
+)
+empty_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "empty-memory artifact has content" "Briefing with empty memory" "$empty_artifact"
+assert_contains "empty-memory provenance shows empty" "memory_status: empty" "$empty_artifact"
+
+# Test: status reachable but search fails → memory_status: degraded (not empty)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR7=$(mktemp -d)
+    cat > "$MOCK_DIR7/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing with degraded memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR7/node"
+    export PATH="$MOCK_DIR7:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    # Override: status reachable, but all search calls fail
+    gather_memory() {
+        echo "degraded" > "$MEMORY_STATUS_FILE"
+        echo ""
+    }
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR7"
+)
+degraded_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "degraded-memory artifact has content" "Briefing with degraded memory" "$degraded_artifact"
+assert_contains "degraded-memory provenance shows degraded" "memory_status: degraded" "$degraded_artifact"
+# Verify it does NOT say "empty" — that's the specific bug this test guards against
+TOTAL=$((TOTAL + 1))
+if [[ "$degraded_artifact" != *"memory_status: empty"* ]]; then
+    echo "  PASS: degraded is not misreported as empty"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: degraded was misreported as empty"; FAIL=$((FAIL + 1))
+fi
+
+rm -rf "$ARTIFACT_DIR"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

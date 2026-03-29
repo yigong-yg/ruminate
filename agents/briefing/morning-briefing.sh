@@ -31,9 +31,92 @@ DRY_RUN="${DRY_RUN:-false}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-60}"
 MEMORY_TIMEOUT="${MEMORY_TIMEOUT:-10}"
 PROMPT_TEMPLATE="${SCRIPT_DIR}/prompt.md"
+BRIEFING_OUTPUT_DIR="${BRIEFING_OUTPUT_DIR:-$HOME/.config/alma/memory/briefings}"
 
 # --- Logging ---
 log_warn() { echo "[WARN] $*" >&2; }
+
+# Memory status: written to MEMORY_STATUS_FILE by gather_memory() (which runs in
+# a command substitution subshell, so globals don't propagate). Read by main().
+# Values: "unavailable" (can't reach Alma), "empty" (reachable, zero matches),
+#         "available" (reachable, results found)
+MEMORY_STATUS_FILE=""
+
+# Build the list of digest filenames used (for provenance).
+# Returns newline-separated basenames, newest first.
+list_digest_names() {
+    local n="${1:-$BRIEFING_DAYS}"
+    local files=()
+    for f in "$DIGEST_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        files+=("$f")
+    done
+    if [[ ${#files[@]} -eq 0 ]]; then echo ""; return; fi
+    printf '%s\n' "${files[@]}" | sort -r | head -n "$n" | while IFS= read -r f; do
+        basename "$f"
+    done
+}
+
+# Build YAML frontmatter provenance block.
+build_provenance() {
+    local model="$1"
+    local days="$2"
+    local digest_names="$3"  # newline-separated list
+    local memory_status="$4"
+    local date="$5"
+
+    local digest_yaml=""
+    if [[ -n "$digest_names" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && digest_yaml="${digest_yaml}  - ${name}
+"
+        done <<< "$digest_names"
+    fi
+
+    printf '%s\n' "---"
+    printf 'schema_version: 1\n'
+    printf 'artifact_type: briefing\n'
+    printf 'date: %s\n' "$date"
+    printf 'generated_at: %s\n' "$(date -Iseconds)"
+    printf 'model: %s\n' "$model"
+    printf 'days: %s\n' "$days"
+    printf 'digest_files:\n'
+    printf '%s' "$digest_yaml"
+    printf 'memory_status: %s\n' "$memory_status"
+    printf '%s\n' "---"
+}
+
+# Write artifact atomically: temp file in target dir, then rename.
+# Returns 0 on success, 1 on failure. Never leaves partial files.
+write_artifact() {
+    local content="$1"
+    local output_path="$2"
+    local output_dir
+    output_dir=$(dirname "$output_path")
+
+    mkdir -p "$output_dir" || {
+        echo "ERROR: Cannot create output directory $output_dir" >&2
+        return 1
+    }
+
+    local tmpfile
+    tmpfile=$(mktemp "${output_dir}/.briefing-XXXXXX") || {
+        echo "ERROR: Cannot create temp file in $output_dir" >&2
+        return 1
+    }
+
+    printf '%s\n' "$content" > "$tmpfile" || {
+        rm -f "$tmpfile"
+        echo "ERROR: Failed to write briefing content" >&2
+        return 1
+    }
+
+    mv "$tmpfile" "$output_path" || {
+        rm -f "$tmpfile"
+        echo "ERROR: Failed to rename artifact to $output_path" >&2
+        return 1
+    }
+}
 
 # --- Context Gathering ---
 
@@ -69,12 +152,12 @@ gather_digests() {
     echo "$content"
 }
 
-# Query Alma vector memory. Returns formatted results or empty string on failure.
+# Query Alma vector memory. Returns formatted results on stdout.
+# Exit code: 0 = search succeeded (results may be empty), 1 = search failed.
 query_memory() {
     local query="$1"
     local tmpfile
     tmpfile=$(mktemp)
-    # Build JSON safely with jq
     jq -n --arg q "$query" '{query: $q}' > "$tmpfile"
 
     local response
@@ -84,44 +167,71 @@ query_memory() {
         -d @"$tmpfile" 2>/dev/null) || {
         rm -f "$tmpfile"
         log_warn "memory query failed (network): $query"
-        echo ""
-        return
+        return 1
     }
     rm -f "$tmpfile"
 
+    # Validate response has .results array (distinguishes success from error body)
+    if ! echo "$response" | jq -e '.results' > /dev/null 2>&1; then
+        log_warn "memory query failed (no .results in response): $query"
+        return 1
+    fi
+
     # Extract top results, format as bullet points
     local results
-    results=$(echo "$response" | jq -r '.results[:5][] | "- " + (.content // "" | split("\n") | .[0])' 2>/dev/null) || {
-        log_warn "memory query failed (parse): $query"
-        echo ""
-        return
-    }
+    results=$(echo "$response" | jq -r '.results[:5][] | "- " + (.content // "" | split("\n") | .[0])' 2>/dev/null) || true
     echo "$results"
+    return 0
 }
 
 # Run all memory queries and combine results.
+# Writes status to $MEMORY_STATUS_FILE:
+#   "unavailable" — can't reach Alma at all
+#   "degraded"    — status endpoint reachable but search calls failed
+#   "empty"       — search succeeded, zero matches
+#   "available"   — search succeeded, results found
+# (Must use file because this runs in a command substitution subshell.)
 gather_memory() {
+    local status="unavailable"
+
     # Quick connectivity check before running all queries
     if ! curl -s --max-time 2 "${ALMA_BASE_URL}/api/memories/status" > /dev/null 2>&1; then
         log_warn "Alma not reachable at $ALMA_BASE_URL, skipping memory queries"
+        [[ -n "$MEMORY_STATUS_FILE" ]] && echo "$status" > "$MEMORY_STATUS_FILE"
         echo ""
         return
     fi
 
     local all_results=""
+    local any_succeeded=false
     local queries=("未完成事项和待办" "重要决策和变更" "风险和阻塞和异常")
 
     for q in "${queries[@]}"; do
         local result
-        result=$(query_memory "$q")
-        if [[ -n "$result" ]]; then
-            all_results="${all_results}
+        if result=$(query_memory "$q"); then
+            # query_memory returned 0 = search call succeeded
+            any_succeeded=true
+            if [[ -n "$result" ]]; then
+                status="available"
+                all_results="${all_results}
 Query: ${q}
 ${result}
 "
+            fi
         fi
+        # query_memory returned 1 = search call failed, skip this query
     done
 
+    # Determine final status
+    if [[ "$status" != "available" ]]; then
+        if [[ "$any_succeeded" == true ]]; then
+            status="empty"  # at least one search succeeded, just no matches
+        else
+            status="degraded"  # status reachable but all searches failed
+        fi
+    fi
+
+    [[ -n "$MEMORY_STATUS_FILE" ]] && echo "$status" > "$MEMORY_STATUS_FILE"
     echo "$all_results"
 }
 
@@ -269,8 +379,12 @@ main() {
     fi
 
     local memory_results=""
+    local memory_status="unavailable"
     if [[ "$DRY_RUN" != "true" ]]; then
+        MEMORY_STATUS_FILE=$(mktemp)
         memory_results=$(gather_memory) || true
+        memory_status=$(cat "$MEMORY_STATUS_FILE" 2>/dev/null || echo "unavailable")
+        rm -f "$MEMORY_STATUS_FILE"
     fi
 
     # 2. Assemble prompt
@@ -296,7 +410,24 @@ main() {
         exit 1
     fi
 
-    echo "$briefing"
+    # 4. Build provenance and write artifact
+    local digest_names
+    digest_names=$(list_digest_names "$BRIEFING_DAYS")
+
+    local today
+    today=$(date +%Y-%m-%d)
+
+    local provenance
+    provenance=$(build_provenance "$BRIEFING_MODEL" "$BRIEFING_DAYS" "$digest_names" "$memory_status" "$today")
+
+    local output_path="${BRIEFING_OUTPUT_DIR}/${today}.md"
+
+    local full_content="${provenance}
+${briefing}"
+
+    write_artifact "$full_content" "$output_path" || exit 1
+
+    echo "Briefing written to $output_path" >&2
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
