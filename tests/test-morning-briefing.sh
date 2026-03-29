@@ -358,5 +358,192 @@ assert_contains "missing key: clean error from call_openai" "OPENAI_API_KEY not 
 rm -rf "$env_dir"
 
 echo ""
+echo "=== Artifact Output ==="
+
+# Setup: source script for helper functions, create output dir
+ARTIFACT_DIR="$TEST_DIR/briefings"
+mkdir -p "$ARTIFACT_DIR"
+
+# Test: write_artifact creates file at expected path
+write_artifact "test content" "$ARTIFACT_DIR/test.md"
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/test.md" ]]; then
+    echo "  PASS: write_artifact creates file"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: write_artifact did not create file"; FAIL=$((FAIL + 1))
+fi
+result=$(cat "$ARTIFACT_DIR/test.md")
+assert_contains "artifact has content" "test content" "$result"
+rm -f "$ARTIFACT_DIR/test.md"
+
+# Test: write_artifact creates parent directories
+write_artifact "nested" "$ARTIFACT_DIR/sub/dir/test.md"
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/sub/dir/test.md" ]]; then
+    echo "  PASS: write_artifact creates parent dirs"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: write_artifact did not create parent dirs"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$ARTIFACT_DIR/sub"
+
+# Test: write_artifact is atomic (no temp files left)
+write_artifact "clean" "$ARTIFACT_DIR/atomic.md"
+leftover=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '.briefing-*' 2>/dev/null | wc -l)
+assert_eq "no temp files left after write" "0" "$leftover"
+rm -f "$ARTIFACT_DIR/atomic.md"
+
+# Test: build_provenance includes expected fields
+prov=$(build_provenance "gpt-4o-mini" "3" "2026-03-27.md, 2026-03-26.md" "available")
+assert_contains "provenance has generated_at" "generated_at:" "$prov"
+assert_contains "provenance has model" "model: gpt-4o-mini" "$prov"
+assert_contains "provenance has days" "days: 3" "$prov"
+assert_contains "provenance has digests" "2026-03-27.md" "$prov"
+assert_contains "provenance has memory status" "memory: available" "$prov"
+
+# Test: list_digest_names returns basenames
+names=$(list_digest_names 2)
+assert_contains "list_digest_names has latest" "2026-03-27.md" "$names"
+assert_contains "list_digest_names has second" "2026-03-26.md" "$names"
+TOTAL=$((TOTAL + 1))
+if [[ "$names" != *"2026-03-25"* ]]; then
+    echo "  PASS: list_digest_names(2) excludes 3rd"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: list_digest_names(2) included 3rd"; FAIL=$((FAIL + 1))
+fi
+
+# Test: dry-run does NOT write artifact
+rm -rf "$ARTIFACT_DIR"/*
+output=$(DIGEST_DIR="$TEST_DIR/digest" DRY_RUN=true BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR" \
+    bash "$SCRIPT" --dry-run 2>&1)
+leftover_dry=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+assert_eq "dry-run writes no artifact" "0" "$leftover_dry"
+
+# Test: non-dry-run with mocked synthesis writes artifact
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR2=$(mktemp -d)
+    cat > "$MOCK_DIR2/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Mock briefing content for artifact test"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR2/node"
+    export PATH="$MOCK_DIR2:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR2"
+)
+today=$(date +%Y-%m-%d)
+TOTAL=$((TOTAL + 1))
+if [[ -f "$ARTIFACT_DIR/${today}.md" ]]; then
+    echo "  PASS: non-dry-run creates dated artifact"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: no artifact at $ARTIFACT_DIR/${today}.md"; FAIL=$((FAIL + 1))
+fi
+
+# Verify artifact has provenance header
+artifact_content=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "artifact has provenance" "briefing-meta" "$artifact_content"
+assert_contains "artifact has model in provenance" "model:" "$artifact_content"
+assert_contains "artifact has briefing content" "Mock briefing content" "$artifact_content"
+
+# Test: synthesis failure leaves no artifact
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR3=$(mktemp -d)
+    cat > "$MOCK_DIR3/node" << 'MOCKSCRIPT'
+#!/bin/bash
+exit 1
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR3/node"
+    export PATH="$MOCK_DIR3:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR3"
+) || true
+leftover_fail=$(find "$ARTIFACT_DIR" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+assert_eq "synthesis failure leaves no artifact" "0" "$leftover_fail"
+
+# Test: BRIEFING_OUTPUT_DIR override works
+custom_dir="$TEST_DIR/custom_out"
+(
+    export BRIEFING_OUTPUT_DIR="$custom_dir"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR4=$(mktemp -d)
+    cat > "$MOCK_DIR4/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Custom dir briefing"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR4/node"
+    export PATH="$MOCK_DIR4:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR4"
+)
+TOTAL=$((TOTAL + 1))
+if [[ -f "$custom_dir/${today}.md" ]]; then
+    echo "  PASS: BRIEFING_OUTPUT_DIR override works"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: no artifact in custom dir $custom_dir"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$custom_dir"
+
+# Test: no digests produces no artifact
+empty_dir3=$(mktemp -d)
+artifact_dir_empty="$TEST_DIR/briefings_empty"
+(
+    export BRIEFING_OUTPUT_DIR="$artifact_dir_empty"
+    export DIGEST_DIR="$empty_dir3"
+    export OPENAI_API_KEY="test-key"
+    source "$SCRIPT"
+    main 2>/dev/null
+) || true
+if [[ -d "$artifact_dir_empty" ]]; then
+    leftover_nodigest=$(find "$artifact_dir_empty" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l)
+else
+    leftover_nodigest=0
+fi
+assert_eq "no digests produces no artifact" "0" "$leftover_nodigest"
+rmdir "$empty_dir3" 2>/dev/null || true
+rm -rf "$artifact_dir_empty"
+
+# Test: memory unavailable still produces artifact (with provenance showing unavailable)
+rm -rf "$ARTIFACT_DIR"/*
+(
+    export BRIEFING_OUTPUT_DIR="$ARTIFACT_DIR"
+    export DIGEST_DIR="$TEST_DIR/digest"
+    export ALMA_BASE_URL="http://localhost:1"
+    export OPENAI_API_KEY="test-key"
+    MOCK_DIR5=$(mktemp -d)
+    cat > "$MOCK_DIR5/node" << 'MOCKSCRIPT'
+#!/bin/bash
+echo "Briefing without memory"
+MOCKSCRIPT
+    chmod +x "$MOCK_DIR5/node"
+    export PATH="$MOCK_DIR5:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main 2>/dev/null
+    rm -rf "$MOCK_DIR5"
+)
+mem_artifact=$(cat "$ARTIFACT_DIR/${today}.md" 2>/dev/null || echo "")
+assert_contains "memory-down artifact has content" "Briefing without memory" "$mem_artifact"
+assert_contains "memory-down provenance shows unavailable" "memory: unavailable" "$mem_artifact"
+
+rm -rf "$ARTIFACT_DIR"
+
+echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
