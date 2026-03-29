@@ -171,6 +171,61 @@ create_mock_data
 
 # --- Tests added in subsequent tasks ---
 
+echo "=== Metadata Extraction ==="
+
+export YOUTUBE_OUTPUT_DIR="$TEST_DIR/output"
+source "$SCRIPT"
+
+# Test: extract_metadata reads key fields from yt-dlp JSON
+eval "$(extract_metadata "$TEST_DIR/metadata.json")"
+assert_eq "video_id" "dQw4w9WgXcQ" "$VIDEO_ID"
+assert_eq "title" "Rick Astley - Never Gonna Give You Up (Official Video)" "$TITLE"
+assert_eq "channel" "Rick Astley" "$CHANNEL"
+assert_eq "duration" "212" "$DURATION"
+assert_eq "upload_date formatted" "2009-10-25" "$UPLOAD_DATE"
+
+# Test: upload_date format conversion (YYYYMMDD → YYYY-MM-DD)
+eval "$(extract_metadata "$TEST_DIR/metadata_no_chapters.json")"
+assert_eq "upload_date conversion" "2026-03-15" "$UPLOAD_DATE"
+
+echo ""
+echo "=== Transcript Cleaning ==="
+
+# Test: clean_vtt strips VTT headers and timestamps, preserves text
+cleaned=$(clean_vtt "$TEST_DIR/subs.vtt")
+assert_contains "cleaned has text" "strangers to love" "$cleaned"
+assert_contains "cleaned has more text" "Never gonna give you up" "$cleaned"
+TOTAL=$((TOTAL + 1))
+if [[ "$cleaned" != *"-->"* ]]; then
+    echo "  PASS: timestamps removed"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: timestamps still present"; FAIL=$((FAIL + 1))
+fi
+TOTAL=$((TOTAL + 1))
+if [[ "$cleaned" != *"WEBVTT"* ]]; then
+    echo "  PASS: VTT header removed"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: VTT header still present"; FAIL=$((FAIL + 1))
+fi
+
+# Test: clean_vtt deduplicates repeated lines
+assert_eq "no duplicate lines" "1" "$(echo "$cleaned" | grep -c 'strangers to love')"
+
+echo ""
+echo "=== Transcript Source Detection ==="
+
+# Test: detect_transcript_source finds official subs
+src=$(detect_transcript_source "$TEST_DIR/metadata.json")
+assert_eq "official subs detected" "official" "$src"
+
+# Test: detect_transcript_source finds auto subs
+src_auto=$(detect_transcript_source "$TEST_DIR/metadata_auto_subs.json")
+assert_eq "auto subs detected" "auto" "$src_auto"
+
+# Test: detect_transcript_source returns none when no subs
+src_none=$(detect_transcript_source "$TEST_DIR/metadata_no_subs.json")
+assert_eq "no subs detected" "none" "$src_none"
+
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
