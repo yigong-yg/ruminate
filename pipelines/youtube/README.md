@@ -69,3 +69,41 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 | `SUBTITLE_LANG` | (auto-detect) | Preferred subtitle language |
 | `DRY_RUN` | `false` | Print artifact to stdout instead of writing |
 | `SEGMENT_MINUTES` | `5` | Fallback segment length when video has no chapters |
+
+---
+
+## Derived Views: chew-short
+
+`youtube-chew.sh` reads a canonical artifact and produces a compressed chew-short view (~800-1500 words).
+
+**Input:** Canonical artifact path (positional argument). Does not re-fetch from YouTube.
+
+**Output:**
+
+| Mode | Behavior |
+|------|----------|
+| Normal | Writes `{video-id}-short.md` to `{input-dir}/chew/`. Nothing on stdout. Path printed to stderr. |
+| `--dry-run` | Prints assembled prompt to stdout. No file written. |
+
+**Idempotency:** Re-running overwrites existing chew artifact.
+
+**Environment Variables:**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CHEW_OUTPUT_DIR` | (sibling `chew/` dir of input) | Override output directory |
+| `CHEW_MODEL` | `gpt-4o-mini` | OpenAI model, override with `--model` |
+| `OPENAI_API_KEY` | (from `.env`) | Required for synthesis |
+
+**Usage:**
+
+```bash
+# Preview prompt
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --dry-run
+
+# Generate chew-short
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md
+
+# Different model
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o
+```
