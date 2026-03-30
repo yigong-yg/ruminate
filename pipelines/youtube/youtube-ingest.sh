@@ -62,34 +62,74 @@ extract_metadata() {
 
 # --- Transcript Source Detection ---
 # Detects best available subtitle track.
-# Returns two values via stdout: "source lang" (e.g. "official en" or "auto zh-Hans")
-# If SUBTITLE_LANG is set, prefers that language. Otherwise auto-detects.
+# Returns: "source lang" (e.g. "official en" or "auto zh-Hans") or "none"
+#
+# Priority within each source (official first, then auto):
+#   1. SUBTITLE_LANG explicit override
+#   2. Video original language (.language from yt-dlp metadata)
+#   3. en fallback
+#   4. First available track
 detect_transcript_source() {
     local json_file="$1"
     local preferred="$SUBTITLE_LANG"
+    local original_lang
+    original_lang=$(jq -r '.language // ""' "$json_file" 2>/dev/null || true)
 
-    # Check official subtitles
+    # Try to pick the best language from a list of available tracks.
+    # Returns the chosen language or empty string if no match.
+    _pick_lang() {
+        local langs="$1"
+        # 1. Explicit override
+        if [[ -n "$preferred" ]] && echo "$langs" | grep -q "^${preferred}$"; then
+            echo "$preferred"; return
+        fi
+        # 2. Video original language (exact match, then prefix match)
+        if [[ -n "$original_lang" ]]; then
+            if echo "$langs" | grep -q "^${original_lang}$"; then
+                echo "$original_lang"; return
+            fi
+            # Prefix match for variants like "en-US" matching "en"
+            local prefix_match
+            prefix_match=$(echo "$langs" | grep "^${original_lang}" | head -1)
+            if [[ -n "$prefix_match" ]]; then
+                echo "$prefix_match"; return
+            fi
+        fi
+        # 3. en fallback (exact, then prefix)
+        if echo "$langs" | grep -q "^en$"; then
+            echo "en"; return
+        fi
+        local en_prefix
+        en_prefix=$(echo "$langs" | grep "^en" | head -1)
+        if [[ -n "$en_prefix" ]]; then
+            echo "$en_prefix"; return
+        fi
+        # 4. First available
+        echo "$langs" | head -1
+    }
+
+    # Check official subtitles first
     local official_langs
     official_langs=$(jq -r '.subtitles // {} | keys_unsorted[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$official_langs" ]]; then
-        if [[ -n "$preferred" ]] && echo "$official_langs" | grep -q "^${preferred}$"; then
-            echo "official $preferred"
-        else
-            echo "official $(echo "$official_langs" | head -1)"
+        local chosen
+        chosen=$(_pick_lang "$official_langs")
+        if [[ -n "$chosen" ]]; then
+            echo "official $chosen"
+            return
         fi
-        return
     fi
 
-    # Check auto-generated captions
+    # Then auto-generated captions
     local auto_langs
     auto_langs=$(jq -r '.automatic_captions // {} | keys_unsorted[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$auto_langs" ]]; then
-        if [[ -n "$preferred" ]] && echo "$auto_langs" | grep -q "^${preferred}$"; then
-            echo "auto $preferred"
-        else
-            echo "auto $(echo "$auto_langs" | head -1)"
+        local chosen
+        chosen=$(_pick_lang "$auto_langs")
+        if [[ -n "$chosen" ]]; then
+            echo "auto $chosen"
+            return
         fi
-        return
     fi
 
     echo "none"

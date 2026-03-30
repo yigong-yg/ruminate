@@ -54,12 +54,14 @@ Not implemented:
 
 ## Subtitle Language
 
-Language selection is automatic by default:
-1. Official/manual captions — first available language
-2. Auto-generated captions — first available language
-3. No subtitles → fail with message
+Official captions are always preferred over auto-generated. Within each source, language is chosen by priority:
 
-No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a specific track (e.g. `SUBTITLE_LANG=zh-Hans`).
+1. `SUBTITLE_LANG` explicit override (e.g. `SUBTITLE_LANG=zh-Hans`)
+2. Video's original language (from yt-dlp `.language` metadata), with prefix matching for variants like `en-US`
+3. `en` fallback
+4. First available track
+
+If no official track matches any priority, the same policy is applied to auto-generated captions. If neither source has any tracks, the script fails with a clear error.
 
 ## Environment Variables
 
