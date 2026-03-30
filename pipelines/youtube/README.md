@@ -104,7 +104,27 @@ Long canonical artifacts may be truncated before synthesis to stay within model 
 - Chinese sources require original-language fragments as grounding proof
 - Generic statements ("X emphasizes Y") are explicitly prohibited
 
+**Routing (ADR-014):**
+
+Before calling the LLM, the script classifies the input and selects a strategy:
+
+| Strategy | Condition | Behavior |
+|----------|-----------|----------|
+| `pass_through` | Body < 2000 chars | Skip chew. Canonical is the final form. Exit 0 |
+| `music` | WPM < 30 | Skip chew. Music strategy not yet implemented. Exit 0 |
+| `long_form` | Everything else | Full distillation prompt |
+
+WPM = `word_count / (duration_seconds / 60)` from canonical frontmatter.
+
+`--force` bypasses routing and always uses `long_form`. Does NOT bypass contract validation.
+
+**Contract validation:**
+
+After LLM synthesis, the output is checked: if output chars >= input chars (compression ratio >= 1.0), the output is discarded. This is exit 0, not an error — it's the contract refusing expansion.
+
 **Idempotency:** Re-running overwrites existing chew artifact.
+
+**Provenance (ADR-015):** Each chew artifact frontmatter includes `provenance: source-only`, `strategy`, and `wpm`.
 
 **Environment Variables:**
 
@@ -113,15 +133,19 @@ Long canonical artifacts may be truncated before synthesis to stay within model 
 | `CHEW_OUTPUT_DIR` | (sibling `chew/` dir of input) | Override output directory |
 | `CHEW_MODEL` | `gpt-4o` | OpenAI model, override with `--model` |
 | `OPENAI_API_KEY` | (from `.env`) | Required for synthesis |
+| `MAX_INPUT_CHARS` | `30000` | Truncation limit for long transcripts |
 
 **Usage:**
 
 ```bash
-# Preview prompt
+# Preview prompt (shows strategy)
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --dry-run
 
 # Generate chew-short
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md
+
+# Force chew on micro-input (bypasses routing, not contract)
+bash pipelines/youtube/youtube-chew.sh path/to/short-video.md --force
 
 # Different model
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o-mini

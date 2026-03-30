@@ -36,7 +36,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 create_fixtures() {
     mkdir -p "$TEST_DIR/youtube"
 
-    # Fixture A: long Chinese interview (matches Saining Xie shape)
+    # Fixture A: long Chinese interview (matches Saining Xie shape, body > 2000 chars)
     cat > "$TEST_DIR/youtube/zhinterview1.md" << 'FIXTURE'
 ---
 schema_version: 1
@@ -50,33 +50,24 @@ ingested_at: 2026-03-30T12:00:00-06:00
 transcript_source: official
 subtitle_language: zh
 chapters: 3
-word_count: 600
+word_count: 15000
 ---
 
 ## Source Description
 
-2026年春天，谢赛宁与图灵奖得主Yann LeCun一起创立了AMI Labs。
+2026年春天，谢赛宁与图灵奖得主Yann LeCun一起创立了AMI Labs。这是一个关于世界模型和人工智能未来的七小时深度对话。
 
 ## 创业起点
 
-谢赛宁在纽约大学的办公室里和Yann LeCun讨论了世界模型的核心概念
-他们认为当前的大语言模型缺乏对物理世界的真正理解
-AMI Labs的目标是建造能够理解三维世界的智能系统
-团队目前有25人来自FAIR和Meta AI Research
+谢赛宁在纽约大学的办公室里和Yann LeCun讨论了世界模型的核心概念。他们认为当前的大语言模型缺乏对物理世界的真正理解。AMI Labs的目标是建造能够理解三维世界的智能系统。团队目前有25人来自FAIR和Meta AI Research。谢赛宁回忆了自己在上海交通大学ACM班的经历，以及后来在UCSD跟随导师涂卓文做研究的日子。他在PhD期间实习了五个不同的机构，包括NEC Labs America、Adobe、Meta、Google Research和DeepMind。这些经历拓宽了他的视野，但也让他的研究方向变得碎片化。他与何恺明在Meta的合作是职业生涯的一个转折点，他们一起做了ResNeXt项目。
 
 ## 世界模型的核心观点
 
-LeCun认为自回归模型有根本性缺陷
-他提出的JEPA架构试图在潜在空间而非像素空间做预测
-谢赛宁解释了为什么视觉理解比语言理解更难
-他们团队在做的是让机器像婴儿一样学习物理规律
+LeCun认为自回归模型有根本性缺陷。他提出的JEPA架构试图在潜在空间而非像素空间做预测。谢赛宁解释了为什么视觉理解比语言理解更难。他们团队在做的是让机器像婴儿一样学习物理规律。世界模型不仅仅是一个技术路线，而是一个所有人都在追求的目标。好的表征对于AI系统的有效决策至关重要。语言是一种交流工具，但它并不涵盖智能的全部。视觉模型和语言模型的scaling laws有根本性不同。
 
 ## 关于OpenAI和竞争格局
 
-谢赛宁评价了OpenAI的路线选择
-他认为scaling law不是万能的
-AMI Labs选择了一条完全不同的技术路径
-他坦言自己对行业的泡沫化趋势感到担忧
+谢赛宁评价了OpenAI的路线选择。他认为scaling law不是万能的。AMI Labs选择了一条完全不同的技术路径。他坦言自己对行业的泡沫化趋势感到担忧。PhD毕业后他面临在OpenAI和Meta之间的选择。尽管收到了OpenAI的offer和Ilya Sutskever的亲自电话邀请，他还是选择了Meta，因为可以和何恺明、Piotr Dollar、Ross Girshick这样的顶级研究者合作。研究是一个非线性过程，最有价值的见解往往来自意想不到的失败。谢赛宁在纽约的公寓里接受了这次长达七小时的对话采访。他谈到了自己从上海交大到纽约大学的学术旅程，从计算机视觉到世界模型的研究转变。他相信真正的智能需要对物理世界有深刻的理解，而不仅仅是处理文本。AMI Labs的25人团队正在探索一条不同于主流大语言模型的道路。他们的目标是建造能够像人类婴儿一样通过观察和互动来学习世界规律的系统。LeCun的JEPA架构代表了一种全新的思维方式。谢赛宁说他对未来充满了期待，但也清醒地认识到这条路的艰难。他提到了学术界和工业界在AI研究方法上的根本分歧，以及这种分歧如何影响了整个领域的发展方向。他认为多样化的研究路径是科学进步的关键。在长达数小时的对话中，他分享了很多个人故事和思考。从小时候在家乡的经历，到在上海交大ACM班遇到的同学和老师，再到在美国的求学和工作经历。每一段经历都塑造了他对AI和科学研究的独特理解。他特别提到了在Google Research和DeepMind实习期间学到的不同研究文化。谢赛宁在采访中还详细讨论了世界模型的技术细节。他解释了为什么当前的大语言模型虽然在文本任务上表现出色，但在理解物理世界方面存在根本性局限。他用了一个生动的比喻来说明这一点：语言模型就像一个只通过阅读书籍来学习的人，而世界模型则是通过直接与环境互动来学习的人。两者之间的区别不仅仅是数据类型的不同，而是学习范式的根本差异。他还提到了JEPA架构的核心思想，以及为什么在潜在空间中进行预测比在像素空间中进行预测更有效率。这些技术洞察展示了谢赛宁作为一位年轻科学家的深刻思考能力和创新精神。在对话的最后部分，他谈到了对年轻研究者的建议，强调了好奇心和独立思考的重要性。他说真正的突破往往来自于那些敢于质疑常规智慧的人。
 FIXTURE
 
     # Fixture B: short English tutorial (different shape)
@@ -114,6 +105,143 @@ The useState hook manages local component state
 useEffect handles side effects like API calls
 Custom hooks let you extract reusable stateful logic
 FIXTURE
+
+    # Fixture C: micro-input (< 2000 chars body → pass_through)
+    cat > "$TEST_DIR/youtube/micro1.md" << 'FIXTURE'
+---
+schema_version: 1
+artifact_type: youtube_canonical
+video_id: micro1
+title: Me at the zoo
+channel: jawed
+duration_seconds: 19
+upload_date: 2005-04-23
+ingested_at: 2026-03-30T12:00:00-06:00
+transcript_source: official
+subtitle_language: en
+chapters: 1
+word_count: 50
+---
+
+## Source Description
+
+First video on YouTube.
+
+## Full Video
+
+All right so here we are in front of the elephants.
+FIXTURE
+
+    # Fixture D: music content (body > 2000 chars but low wpm → music strategy)
+    # word_count=80, duration=213s → wpm = 80*60/213 = 22 < 30
+    # Body padded with repeated lyrics to exceed 2000 chars
+    cat > "$TEST_DIR/youtube/music1.md" << 'FIXTURE'
+---
+schema_version: 1
+artifact_type: youtube_canonical
+video_id: music1
+title: Never Gonna Give You Up
+channel: Rick Astley
+duration_seconds: 213
+upload_date: 2009-10-25
+ingested_at: 2026-03-30T12:00:00-06:00
+transcript_source: official
+subtitle_language: en
+chapters: 1
+word_count: 80
+---
+
+## Source Description
+
+Official music video for Never Gonna Give You Up by Rick Astley. Released in 1987 as the lead single from the album Whenever You Need Somebody. The song was written and produced by Stock Aitken Waterman.
+
+## Full Song
+
+We're no strangers to love
+You know the rules and so do I
+A full commitment's what I'm thinking of
+You wouldn't get this from any other guy
+
+I just wanna tell you how I'm feeling
+Gotta make you understand
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+
+We've known each other for so long
+Your heart's been aching but you're too shy to say it
+Inside we both know what's been going on
+We know the game and we're gonna play it
+And if you ask me how I'm feeling
+Don't tell me you're too blind to see
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+
+Ooh give you up
+Ooh give you up
+Never gonna give never gonna give give you up
+Never gonna give never gonna give give you up
+
+We've known each other for so long
+Your heart's been aching but you're too shy to say it
+Inside we both know what's been going on
+We know the game and we're gonna play it
+
+I just wanna tell you how I'm feeling
+Gotta make you understand
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+
+Never gonna give you up
+Never gonna let you down
+Never gonna run around and desert you
+Never gonna make you cry
+Never gonna say goodbye
+Never gonna tell a lie and hurt you
+FIXTURE
+    # Pad zhinterview1 body to ensure > 2000 chars for routing
+    local pad=""
+    for i in $(seq 1 30); do
+        pad="${pad}
+Additional research discussion point ${i}: exploring novel approaches to understanding visual representations and world models in the context of modern AI systems."
+    done
+    echo "$pad" >> "$TEST_DIR/youtube/zhinterview1.md"
+
+    # Pad music1 body to ensure > 2000 chars but keep wpm < 30
+    local music_pad=""
+    for i in $(seq 1 10); do
+        music_pad="${music_pad}
+Never gonna give you up never gonna let you down repeat ${i}"
+    done
+    echo "$music_pad" >> "$TEST_DIR/youtube/music1.md"
 }
 
 create_fixtures
@@ -138,6 +266,8 @@ assert_eq "en: title" "React in 100 Seconds" "$TITLE"
 assert_eq "en: channel" "Fireship" "$CHANNEL"
 assert_eq "en: subtitle_language" "en" "$SUBTITLE_LANGUAGE"
 assert_eq "en: transcript_source" "auto" "$TRANSCRIPT_SOURCE"
+assert_eq "en: word_count" "120" "$SRC_WORD_COUNT"
+assert_eq "en: duration" "128" "$SRC_DURATION"
 
 echo ""
 echo "=== Body Extraction ==="
@@ -219,8 +349,8 @@ else
     echo "  FAIL: dry-run wrote artifact"; FAIL=$((FAIL + 1))
 fi
 
-# Test: dry-run works on English fixture too
-output_en=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/entutorial1.md" --dry-run 2>&1)
+# Test: dry-run works on English fixture (--force: body < 2000 chars)
+output_en=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/entutorial1.md" --dry-run --force 2>&1)
 assert_contains "en dry-run has content" "virtual DOM" "$output_en"
 
 echo ""
@@ -278,7 +408,7 @@ assert_contains "e2e non-truncated: chars used = total" "source_chars_used" "$ar
 
 rm -rf "$TEST_DIR/youtube/chew"
 
-# Test: CHEW_OUTPUT_DIR override
+# Test: CHEW_OUTPUT_DIR override (--force needed: entutorial1 body < 2000 chars)
 custom_dir="$TEST_DIR/custom_chew"
 (
     export CHEW_OUTPUT_DIR="$custom_dir"
@@ -287,7 +417,7 @@ custom_dir="$TEST_DIR/custom_chew"
     source "$SCRIPT"
     cygpath() { echo "$2"; }
     export -f cygpath
-    main "$TEST_DIR/youtube/entutorial1.md" 2>/dev/null
+    main "$TEST_DIR/youtube/entutorial1.md" --force 2>/dev/null
 )
 
 TOTAL=$((TOTAL + 1))
@@ -354,6 +484,78 @@ else
 fi
 
 rm -rf "$MOCK_DIR" "$fail_dir"
+
+echo ""
+echo "=== Routing ==="
+
+# Test: pass_through on micro input (< 2000 chars body)
+pt_out=$(bash "$SCRIPT" "$TEST_DIR/youtube/micro1.md" 2>&1) || true
+assert_contains "pass_through: skipping message" "source too short" "$pt_out"
+TOTAL=$((TOTAL + 1))
+if [[ $(find "$TEST_DIR/youtube/chew" -name 'micro1-short.md' 2>/dev/null | wc -l) -eq 0 ]]; then
+    echo "  PASS: pass_through writes no artifact"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: pass_through wrote artifact"; FAIL=$((FAIL + 1))
+fi
+
+# Test: music on low wpm input
+# music1: word_count=80, duration=213s → wpm = 80*60/213 = 22 < 30
+music_out=$(bash "$SCRIPT" "$TEST_DIR/youtube/music1.md" 2>&1) || true
+assert_contains "music: skipping message" "music content detected" "$music_out"
+assert_contains "music: shows wpm" "wpm=" "$music_out"
+
+# Test: long_form routing on normal input
+lf_out=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/zhinterview1.md" --dry-run 2>&1)
+assert_contains "long_form: strategy shown" "strategy=long_form" "$lf_out"
+
+# Test: --force bypasses pass_through routing
+force_out=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/micro1.md" --force --dry-run 2>&1)
+assert_contains "force: bypasses routing" "strategy=long_form" "$force_out"
+assert_contains "force: shows force=true" "force=true" "$force_out"
+
+# Test: dry-run prints strategy in header
+assert_contains "dry-run header has strategy" "strategy=" "$lf_out"
+
+echo ""
+echo "=== Contract Validation ==="
+
+# Test: expansion detection (output >= input) → exit 0, no artifact
+MOCK_DIR2=$(mktemp -d)
+# Mock node that returns MORE text than the input body
+cat > "$MOCK_DIR2/node" << 'MOCKSCRIPT'
+#!/bin/bash
+# Generate ~3000 chars of output (more than entutorial1 body of ~400 chars)
+for i in $(seq 1 60); do echo "This is a very long expansion line number $i that pads the output significantly beyond the input size."; done
+MOCKSCRIPT
+chmod +x "$MOCK_DIR2/node"
+
+expansion_dir="$TEST_DIR/expansion_chew"
+(
+    export CHEW_OUTPUT_DIR="$expansion_dir"
+    export OPENAI_API_KEY="test-key"
+    export PATH="$MOCK_DIR2:$PATH"
+    source "$SCRIPT"
+    cygpath() { echo "$2"; }
+    export -f cygpath
+    main "$TEST_DIR/youtube/entutorial1.md" 2>/dev/null
+) || true
+
+TOTAL=$((TOTAL + 1))
+if [[ $(find "$expansion_dir" -name '*.md' 2>/dev/null | wc -l) -eq 0 ]]; then
+    echo "  PASS: expansion discarded, no artifact"; PASS=$((PASS + 1))
+else
+    echo "  FAIL: expansion artifact was written"; FAIL=$((FAIL + 1))
+fi
+rm -rf "$MOCK_DIR2" "$expansion_dir"
+
+echo ""
+echo "=== Provenance Frontmatter ==="
+
+# Test: frontmatter contains provenance, strategy, wpm
+fm_test=$(build_chew_frontmatter "v1" "T" "C" "en" "auto" "v1.md" "gpt-4o" "500" "false" "5000" "5000" "long_form" "142")
+assert_contains "fm has provenance" "provenance: source-only" "$fm_test"
+assert_contains "fm has strategy" "strategy: long_form" "$fm_test"
+assert_contains "fm has wpm" "wpm: 142" "$fm_test"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
