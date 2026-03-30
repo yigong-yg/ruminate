@@ -69,3 +69,58 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 | `SUBTITLE_LANG` | (auto-detect) | Preferred subtitle language |
 | `DRY_RUN` | `false` | Print artifact to stdout instead of writing |
 | `SEGMENT_MINUTES` | `5` | Fallback segment length when video has no chapters |
+
+---
+
+## Derived Views: chew-short
+
+`youtube-chew.sh` reads a canonical artifact and produces a distilled chew-short view (~1000-2000 words). This is distillation, not summarization — it extracts the narrative skeleton and preserves specific anchors, not generic opinions.
+
+**Input:** Canonical artifact path (positional argument). Does not re-fetch from YouTube.
+
+**Output:**
+
+| Mode | Behavior |
+|------|----------|
+| Normal | Writes `{video-id}-short.md` to `{input-dir}/chew/`. Nothing on stdout. Path printed to stderr. |
+| `--dry-run` | Prints assembled prompt to stdout. No file written. |
+
+**Output structure:**
+- `## Core Throughline` — actual thesis and stakes, not "X discusses Y"
+- `## Narrative Arc` — 5-8 key turning points with concrete anchors. Chinese sources include original-language fragments
+- `## Precision Anchors` — 10-20 specific information nodes (people, orgs, years, papers, decisions)
+- `## Tensions & Contrarian Claims` — sharp edges preserved, not smoothed
+
+**Source coverage:**
+
+Long canonical artifacts may be truncated before synthesis to stay within model token/prompt limits (`MAX_INPUT_CHARS`, default 30000). The artifact frontmatter always records whether truncation occurred:
+- `source_truncated: true|false`
+- `source_chars_used` / `source_chars_total`
+
+**Anti-hallucination constraints:**
+- No quotation marks in output (no quotes section)
+- Chinese sources require original-language fragments as grounding proof
+- Generic statements ("X emphasizes Y") are explicitly prohibited
+
+**Idempotency:** Re-running overwrites existing chew artifact.
+
+**Environment Variables:**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CHEW_OUTPUT_DIR` | (sibling `chew/` dir of input) | Override output directory |
+| `CHEW_MODEL` | `gpt-4o` | OpenAI model, override with `--model` |
+| `OPENAI_API_KEY` | (from `.env`) | Required for synthesis |
+
+**Usage:**
+
+```bash
+# Preview prompt
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --dry-run
+
+# Generate chew-short
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md
+
+# Different model
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o-mini
+```
