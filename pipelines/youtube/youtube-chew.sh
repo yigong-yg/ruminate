@@ -209,6 +209,9 @@ build_chew_frontmatter() {
     local video_id="$1" title="$2" channel="$3"
     local subtitle_language="$4" transcript_source="$5"
     local source_artifact="$6" model="$7" word_count="$8"
+    local source_truncated="${9:-false}"
+    local source_chars_used="${10:-0}"
+    local source_chars_total="${11:-0}"
 
     printf '%s\n' "---"
     printf 'schema_version: 1\n'
@@ -222,6 +225,9 @@ build_chew_frontmatter() {
     printf 'word_count: %s\n' "$word_count"
     printf 'subtitle_language: %s\n' "$subtitle_language"
     printf 'transcript_source: %s\n' "$transcript_source"
+    printf 'source_truncated: %s\n' "$source_truncated"
+    printf 'source_chars_used: %s\n' "$source_chars_used"
+    printf 'source_chars_total: %s\n' "$source_chars_total"
     printf '%s\n' "---"
 }
 
@@ -286,13 +292,19 @@ main() {
         exit 1
     fi
 
+    # Track source coverage for provenance
+    local source_chars_total=${#body}
+    local source_truncated="false"
+    local source_chars_used=$source_chars_total
+
     # Truncate if body exceeds MAX_INPUT_CHARS (avoids TPM/context limits)
-    local body_len=${#body}
-    if [[ $body_len -gt $MAX_INPUT_CHARS ]]; then
-        echo "Input body is ${body_len} chars, truncating to ${MAX_INPUT_CHARS} chars" >&2
+    if [[ $source_chars_total -gt $MAX_INPUT_CHARS ]]; then
+        echo "Input body is ${source_chars_total} chars, truncating to ${MAX_INPUT_CHARS} chars" >&2
         body="${body:0:$MAX_INPUT_CHARS}
 
-[... transcript truncated at ${MAX_INPUT_CHARS} chars for token budget. Distill from what is available.]"
+[... transcript truncated at ${MAX_INPUT_CHARS} of ${source_chars_total} chars for token budget. Distill from what is available.]"
+        source_truncated="true"
+        source_chars_used=$MAX_INPUT_CHARS
     fi
 
     # Build prompt
@@ -328,7 +340,8 @@ main() {
 
     local frontmatter
     frontmatter=$(build_chew_frontmatter "$VIDEO_ID" "$TITLE" "$CHANNEL" \
-        "$SUBTITLE_LANGUAGE" "$TRANSCRIPT_SOURCE" "$source_basename" "$CHEW_MODEL" "$word_count")
+        "$SUBTITLE_LANGUAGE" "$TRANSCRIPT_SOURCE" "$source_basename" "$CHEW_MODEL" "$word_count" \
+        "$source_truncated" "$source_chars_used" "$source_chars_total")
 
     local full_artifact="${frontmatter}
 ${chew_content}"

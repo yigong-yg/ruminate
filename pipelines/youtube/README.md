@@ -91,6 +91,12 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 - `## Precision Anchors` — 10-20 specific information nodes (people, orgs, years, papers, decisions)
 - `## Tensions & Contrarian Claims` — sharp edges preserved, not smoothed
 
+**Source coverage:**
+
+Long canonical artifacts may be truncated before synthesis to stay within model token/prompt limits (`MAX_INPUT_CHARS`, default 30000). The artifact frontmatter always records whether truncation occurred:
+- `source_truncated: true|false`
+- `source_chars_used` / `source_chars_total`
+
 **Anti-hallucination constraints:**
 - No quotation marks in output (no quotes section)
 - Chinese sources require original-language fragments as grounding proof

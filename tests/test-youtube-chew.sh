@@ -174,7 +174,7 @@ assert_contains "prompt has zh grounding rule" "original-language fragments" "$p
 echo ""
 echo "=== Chew Frontmatter ==="
 
-fm=$(build_chew_frontmatter "vid1" "Test: Title" "Chan" "zh" "official" "vid1.md" "gpt-4o-mini" "500")
+fm=$(build_chew_frontmatter "vid1" "Test: Title" "Chan" "zh" "official" "vid1.md" "gpt-4o-mini" "500" "false" "600" "600")
 assert_contains "fm has schema_version" "schema_version: 1" "$fm"
 assert_contains "fm has artifact_type" "artifact_type: youtube_chew_short" "$fm"
 assert_contains "fm has source_artifact" "source_artifact: vid1.md" "$fm"
@@ -183,6 +183,24 @@ assert_contains "fm has quoted title" '"Test: Title"' "$fm"
 assert_contains "fm has subtitle_language" "subtitle_language: zh" "$fm"
 assert_contains "fm has transcript_source" "transcript_source: official" "$fm"
 assert_contains "fm has model" "model: gpt-4o-mini" "$fm"
+
+echo ""
+echo "=== Source Coverage Provenance ==="
+
+# Test: non-truncated input → source_truncated: false
+fm_full=$(build_chew_frontmatter "v1" "T" "C" "en" "auto" "v1.md" "gpt-4o" "500" "false" "800" "800")
+assert_contains "non-truncated: source_truncated false" "source_truncated: false" "$fm_full"
+assert_contains "non-truncated: chars used" "source_chars_used: 800" "$fm_full"
+assert_contains "non-truncated: chars total" "source_chars_total: 800" "$fm_full"
+
+# Test: truncated input → source_truncated: true with different used/total
+fm_trunc=$(build_chew_frontmatter "v2" "T" "C" "zh" "official" "v2.md" "gpt-4o" "500" "true" "30000" "148000")
+assert_contains "truncated: source_truncated true" "source_truncated: true" "$fm_trunc"
+assert_contains "truncated: chars used" "source_chars_used: 30000" "$fm_trunc"
+assert_contains "truncated: chars total" "source_chars_total: 148000" "$fm_trunc"
+
+# Test: end-to-end — small fixture (under limit) produces source_truncated: false in artifact
+# (uses the mocked synthesis path from later in the test)
 
 echo ""
 echo "=== Dry-Run ==="
@@ -255,6 +273,8 @@ assert_contains "artifact has video_id" "video_id: zhinterview1" "$art"
 assert_contains "artifact has subtitle_language" "subtitle_language: zh" "$art"
 assert_contains "artifact has transcript_source" "transcript_source: official" "$art"
 assert_contains "artifact has chew content" "Mock throughline" "$art"
+assert_contains "e2e non-truncated: source_truncated false" "source_truncated: false" "$art"
+assert_contains "e2e non-truncated: chars used = total" "source_chars_used" "$art"
 
 rm -rf "$TEST_DIR/youtube/chew"
 
