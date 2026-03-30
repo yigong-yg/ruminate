@@ -13,10 +13,12 @@ MVP ships the structural layer only. Anchor summaries (1-2 sentence chapter anch
 
 ## Output
 
-Canonical artifact written to `$YOUTUBE_OUTPUT_DIR/{video-id}.md`
-(default: `~/.config/alma/memory/ingested/youtube/`)
+| Mode | Behavior |
+|------|----------|
+| Normal | Artifact written to `$YOUTUBE_OUTPUT_DIR/{video-id}.md`. Nothing on stdout. Artifact path printed to stderr. |
+| `--dry-run` | Artifact printed to stdout. No file written. |
 
-Nothing on stdout. Artifact path printed to stderr.
+Default output directory: `~/.config/alma/memory/ingested/youtube/`
 
 ## Dependencies
 
@@ -53,11 +55,11 @@ Not implemented:
 ## Subtitle Language
 
 Language selection is automatic by default:
-1. Official/manual captions in any available language
-2. Auto-generated captions (prefer `en` if available, else first available)
+1. Official/manual captions — first available language
+2. Auto-generated captions — first available language
 3. No subtitles → fail with message
 
-Override with `SUBTITLE_LANG` to prefer a specific language track (e.g. `SUBTITLE_LANG=zh-Hans`).
+No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a specific track (e.g. `SUBTITLE_LANG=zh-Hans`).
 
 ## Environment Variables
 

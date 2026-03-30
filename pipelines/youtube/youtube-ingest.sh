@@ -72,19 +72,10 @@ detect_transcript_source() {
     local official_langs
     official_langs=$(jq -r '.subtitles // {} | keys[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$official_langs" ]]; then
-        if [[ -n "$preferred" ]]; then
-            if echo "$official_langs" | grep -q "^${preferred}$"; then
-                echo "official $preferred"
-                return
-            fi
-        fi
-        # Prefer en if available, else first
-        if echo "$official_langs" | grep -q "^en$"; then
-            echo "official en"
+        if [[ -n "$preferred" ]] && echo "$official_langs" | grep -q "^${preferred}$"; then
+            echo "official $preferred"
         else
-            local first_lang
-            first_lang=$(echo "$official_langs" | head -1)
-            echo "official $first_lang"
+            echo "official $(echo "$official_langs" | head -1)"
         fi
         return
     fi
@@ -93,19 +84,10 @@ detect_transcript_source() {
     local auto_langs
     auto_langs=$(jq -r '.automatic_captions // {} | keys[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$auto_langs" ]]; then
-        if [[ -n "$preferred" ]]; then
-            if echo "$auto_langs" | grep -q "^${preferred}$"; then
-                echo "auto $preferred"
-                return
-            fi
-        fi
-        # Prefer en if available, else first
-        if echo "$auto_langs" | grep -q "^en$"; then
-            echo "auto en"
+        if [[ -n "$preferred" ]] && echo "$auto_langs" | grep -q "^${preferred}$"; then
+            echo "auto $preferred"
         else
-            local first_auto
-            first_auto=$(echo "$auto_langs" | head -1)
-            echo "auto $first_auto"
+            echo "auto $(echo "$auto_langs" | head -1)"
         fi
         return
     fi
@@ -212,6 +194,7 @@ build_artifact() {
     local json_file="$1"
     local vtt_file="$2"
     local transcript_source="$3"
+    local subtitle_language="${4:-unknown}"
 
     eval "$(extract_metadata "$json_file")"
 
@@ -237,6 +220,7 @@ build_artifact() {
     printf 'upload_date: %s\n' "$UPLOAD_DATE"
     printf 'ingested_at: %s\n' "$(date -Iseconds)"
     printf 'transcript_source: %s\n' "$transcript_source"
+    printf 'subtitle_language: %s\n' "$subtitle_language"
     printf 'chapters: %s\n' "$chapter_count"
     printf 'word_count: %s\n' "$word_count"
     printf '%s\n' "---"
@@ -369,7 +353,7 @@ main() {
     # Step 4: Build canonical artifact
     echo "Building canonical artifact..." >&2
     local artifact
-    artifact=$(build_artifact "$json_file" "$vtt_file" "$transcript_source")
+    artifact=$(build_artifact "$json_file" "$vtt_file" "$transcript_source" "$sub_lang")
 
     # Step 5: Output
     if [[ "$DRY_RUN" == "true" ]]; then

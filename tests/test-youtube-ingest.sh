@@ -220,7 +220,7 @@ MOCK_META
 src_zh=$(detect_transcript_source "$TEST_DIR/metadata_zh_only.json")
 assert_eq "zh-only official subs detected" "official zh-Hans" "$src_zh"
 
-# Test: SUBTITLE_LANG override prefers specified language
+# Test: multi-language default picks first available (jq keys[] is sorted)
 cat > "$TEST_DIR/metadata_multi_lang.json" << 'MOCK_META'
 {
     "id": "multilang789",
@@ -234,8 +234,17 @@ cat > "$TEST_DIR/metadata_multi_lang.json" << 'MOCK_META'
     "automatic_captions": {}
 }
 MOCK_META
+# Default: no SUBTITLE_LANG → first available (jq keys[] sorts: en, ja, zh-Hans)
+src_default=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_multi_lang.json")
+assert_eq "multi-lang default picks first available" "official en" "$src_default"
+
+# Override: SUBTITLE_LANG=zh-Hans → picks zh-Hans
 src_pref=$(SUBTITLE_LANG="zh-Hans" detect_transcript_source "$TEST_DIR/metadata_multi_lang.json")
-assert_eq "preferred lang zh-Hans selected" "official zh-Hans" "$src_pref"
+assert_eq "SUBTITLE_LANG override picks zh-Hans" "official zh-Hans" "$src_pref"
+
+# End-to-end: build_artifact with language produces subtitle_language in frontmatter
+lang_artifact=$(build_artifact "$TEST_DIR/metadata_multi_lang.json" "$TEST_DIR/subs.vtt" "official" "zh-Hans")
+assert_contains "frontmatter has subtitle_language" "subtitle_language: zh-Hans" "$lang_artifact"
 
 echo ""
 echo "=== Chapter Detection ==="
