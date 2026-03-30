@@ -74,7 +74,7 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 
 ## Derived Views: chew-short
 
-`youtube-chew.sh` reads a canonical artifact and produces a compressed chew-short view (~800-1500 words).
+`youtube-chew.sh` reads a canonical artifact and produces a distilled chew-short view (~1000-2000 words). This is distillation, not summarization — it extracts the narrative skeleton and preserves specific anchors, not generic opinions.
 
 **Input:** Canonical artifact path (positional argument). Does not re-fetch from YouTube.
 
@@ -85,6 +85,17 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 | Normal | Writes `{video-id}-short.md` to `{input-dir}/chew/`. Nothing on stdout. Path printed to stderr. |
 | `--dry-run` | Prints assembled prompt to stdout. No file written. |
 
+**Output structure:**
+- `## Core Throughline` — actual thesis and stakes, not "X discusses Y"
+- `## Narrative Arc` — 5-8 key turning points with concrete anchors. Chinese sources include original-language fragments
+- `## Precision Anchors` — 10-20 specific information nodes (people, orgs, years, papers, decisions)
+- `## Tensions & Contrarian Claims` — sharp edges preserved, not smoothed
+
+**Anti-hallucination constraints:**
+- No quotation marks in output (no quotes section)
+- Chinese sources require original-language fragments as grounding proof
+- Generic statements ("X emphasizes Y") are explicitly prohibited
+
 **Idempotency:** Re-running overwrites existing chew artifact.
 
 **Environment Variables:**
@@ -92,7 +103,7 @@ No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a s
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CHEW_OUTPUT_DIR` | (sibling `chew/` dir of input) | Override output directory |
-| `CHEW_MODEL` | `gpt-4o-mini` | OpenAI model, override with `--model` |
+| `CHEW_MODEL` | `gpt-4o` | OpenAI model, override with `--model` |
 | `OPENAI_API_KEY` | (from `.env`) | Required for synthesis |
 
 **Usage:**
@@ -105,5 +116,5 @@ bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --dry-run
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md
 
 # Different model
-bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o
+bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o-mini
 ```

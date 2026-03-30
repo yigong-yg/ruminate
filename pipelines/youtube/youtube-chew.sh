@@ -21,9 +21,10 @@ if [[ -z "${OPENAI_API_KEY:-}" && -f "${REPO_ROOT}/.env" ]]; then
 fi
 
 CHEW_OUTPUT_DIR="${CHEW_OUTPUT_DIR:-}"
-CHEW_MODEL="${CHEW_MODEL:-gpt-4o-mini}"
+CHEW_MODEL="${CHEW_MODEL:-gpt-4o}"
 DRY_RUN="${DRY_RUN:-false}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-120}"
+MAX_INPUT_CHARS="${MAX_INPUT_CHARS:-30000}"
 
 # --- Helpers ---
 
@@ -83,29 +84,42 @@ build_chew_prompt() {
     local title="$2"
     local channel="$3"
 
-    local system_prompt='You are a content analyst producing a high-density summary of a video transcript.
+    local system_prompt='You are extracting the skeletal structure of a narrative, not compressing it into opinions.
 
-Rules:
-- Preserve specific names, numbers, technical terms, organizations, and sharp claims
-- Attribute ideas to speakers when identifiable
-- Prioritize information density over friendliness
-- Never invent quotes — only use direct quotes clearly grounded in the source text
-- If unsure about a quote, prefer specific claims/details instead
-- Preserve conceptual edges rather than smoothing them out
-- Match the source language
+Core directives:
+- Preserve the story arc: who did what, when, why, and what changed as a result
+- Preserve named entities exactly (people, orgs, places, papers, projects)
+- Preserve specific numbers, years, and concrete details
+- If the source language is Chinese, include short original-language fragments (5-20 chars) as grounding anchors in the Narrative Arc section. These prove you actually read that part of the transcript
+- NEVER invent quotes. Do not output anything in quotation marks. There is no quotes section
+- NEVER output generic statements like "X emphasizes the importance of Y" or "X reflects on his journey." If you cannot say something specific, say nothing
+- Prioritize coherence (can someone reconstruct the story arc?) over coverage (did every chapter get mentioned?)
+- It is acceptable to skip chapters that are low-density filler (greetings, tangents, repeated content). Not every chapter deserves space
+- The target audience already has access to the full canonical artifact. Your job is to give them reasons to read it and a map for navigating it, not to replace it
+- Match the source language. Density over length. 1000 sharp words > 2000 vague ones
 
-Output structure (800-1500 words total):
+Output structure (1000-2000 words total):
 
-## Key Takeaways
-3-5 bullets, each 1-2 sentences. Capture "why this matters," not generic recap.
+## Core Throughline
+What this content is actually about and why it matters. 2-4 paragraphs.
+Not "X discusses Y" — instead, the actual thesis and its stakes.
 
-## Per-Chapter Summaries
-For each chapter in the source:
-### {chapter title}
-2-4 sentences. Preserve names, numbers, technical terms, contrarian claims.
+## Narrative Arc
+5-8 key turning points that define the story of this content.
+Each point MUST include at least one concrete anchor: a specific person, organization, year, decision, event, or scene.
+If the source language is Chinese, each point MUST include at least one short original-language fragment (5-20 characters) from the transcript to prove grounding.
+These are not opinions — they are plot points.
 
-## Notable Quotes & Specifics
-5-10 items. Direct quotes only if clearly grounded. Always attribute to chapter.'
+## Precision Anchors
+10-20 specific information nodes that should not be lost.
+Categories: people, organizations, years, papers/projects, key judgments, specific story beats.
+Format as a flat list. Each item is one line, max two sentences.
+No paraphrasing into generic statements. If you cannot be specific, omit.
+
+## Tensions & Contrarian Claims
+The genuinely provocative or non-obvious positions expressed in this content.
+Do not smooth them out. Do not hedge. Preserve the sharp edges.
+3-5 items, each 1-2 sentences.'
 
     printf '%s\n\n---\n\nVideo: %s\nChannel: %s\n\n%s' \
         "$system_prompt" "$title" "$channel" "$body"
@@ -123,7 +137,7 @@ build_chew_payload() {
             messages: [
                 {role: "system", content: .}
             ],
-            max_tokens: 4000,
+            max_tokens: 6000,
             temperature: 0.3
         }'
 }
@@ -270,6 +284,15 @@ main() {
     if [[ -z "$body" ]]; then
         echo "ERROR: No body content found in $input_file" >&2
         exit 1
+    fi
+
+    # Truncate if body exceeds MAX_INPUT_CHARS (avoids TPM/context limits)
+    local body_len=${#body}
+    if [[ $body_len -gt $MAX_INPUT_CHARS ]]; then
+        echo "Input body is ${body_len} chars, truncating to ${MAX_INPUT_CHARS} chars" >&2
+        body="${body:0:$MAX_INPUT_CHARS}
+
+[... transcript truncated at ${MAX_INPUT_CHARS} chars for token budget. Distill from what is available.]"
     fi
 
     # Build prompt

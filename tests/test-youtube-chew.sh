@@ -161,12 +161,15 @@ echo ""
 echo "=== Prompt Assembly ==="
 
 prompt=$(build_chew_prompt "$body_zh" "Test Title" "Test Channel")
-assert_contains "prompt has system instructions" "high-density summary" "$prompt"
+assert_contains "prompt has distillation directive" "skeletal structure" "$prompt"
 assert_contains "prompt has title" "Test Title" "$prompt"
 assert_contains "prompt has body content" "谢赛宁" "$prompt"
-assert_contains "prompt has output structure" "Key Takeaways" "$prompt"
-assert_contains "prompt has output structure" "Per-Chapter Summaries" "$prompt"
-assert_contains "prompt has output structure" "Notable Quotes" "$prompt"
+assert_contains "prompt has output structure" "Core Throughline" "$prompt"
+assert_contains "prompt has output structure" "Narrative Arc" "$prompt"
+assert_contains "prompt has output structure" "Precision Anchors" "$prompt"
+assert_contains "prompt has output structure" "Tensions" "$prompt"
+assert_contains "prompt has anti-hallucination" "NEVER invent quotes" "$prompt"
+assert_contains "prompt has zh grounding rule" "original-language fragments" "$prompt"
 
 echo ""
 echo "=== Chew Frontmatter ==="
@@ -189,7 +192,7 @@ output=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/zhinterview1.md" --dry-r
 assert_contains "dry-run has DRY-RUN header" "DRY-RUN" "$output"
 assert_contains "dry-run has video_id" "zhinterview1" "$output"
 assert_contains "dry-run has Chinese content" "谢赛宁" "$output"
-assert_contains "dry-run has prompt structure" "Key Takeaways" "$output"
+assert_contains "dry-run has prompt structure" "Core Throughline" "$output"
 
 TOTAL=$((TOTAL + 1))
 if [[ $(find "$TEST_DIR/chew_out" -name '*.md' 2>/dev/null | wc -l) -eq 0 ]]; then
@@ -209,13 +212,19 @@ echo "=== Mocked Synthesis ==="
 MOCK_DIR=$(mktemp -d)
 cat > "$MOCK_DIR/node" << 'MOCKSCRIPT'
 #!/bin/bash
-echo "## Key Takeaways
-- Mock takeaway about world models
-## Per-Chapter Summaries
-### Chapter 1
-Mock chapter summary
-## Notable Quotes & Specifics
-- Mock quote from chapter 1"
+echo "## Core Throughline
+Mock throughline about world models and AMI Labs.
+
+## Narrative Arc
+- 谢赛宁与Yann LeCun在2026年创立AMI Labs（团队25人）
+- Mock narrative point with concrete anchor
+
+## Precision Anchors
+- AMI Labs: founded 2026, 25-person team from FAIR
+- Mock precision anchor
+
+## Tensions & Contrarian Claims
+- Mock contrarian claim about scaling laws"
 MOCKSCRIPT
 chmod +x "$MOCK_DIR/node"
 
@@ -245,7 +254,7 @@ assert_contains "artifact has source_artifact" "source_artifact: zhinterview1.md
 assert_contains "artifact has video_id" "video_id: zhinterview1" "$art"
 assert_contains "artifact has subtitle_language" "subtitle_language: zh" "$art"
 assert_contains "artifact has transcript_source" "transcript_source: official" "$art"
-assert_contains "artifact has chew content" "Mock takeaway" "$art"
+assert_contains "artifact has chew content" "Mock throughline" "$art"
 
 rm -rf "$TEST_DIR/youtube/chew"
 
