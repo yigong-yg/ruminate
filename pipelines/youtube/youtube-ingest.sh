@@ -70,7 +70,7 @@ detect_transcript_source() {
 
     # Check official subtitles
     local official_langs
-    official_langs=$(jq -r '.subtitles // {} | keys[]' "$json_file" 2>/dev/null || true)
+    official_langs=$(jq -r '.subtitles // {} | keys_unsorted[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$official_langs" ]]; then
         if [[ -n "$preferred" ]] && echo "$official_langs" | grep -q "^${preferred}$"; then
             echo "official $preferred"
@@ -82,7 +82,7 @@ detect_transcript_source() {
 
     # Check auto-generated captions
     local auto_langs
-    auto_langs=$(jq -r '.automatic_captions // {} | keys[]' "$json_file" 2>/dev/null || true)
+    auto_langs=$(jq -r '.automatic_captions // {} | keys_unsorted[]' "$json_file" 2>/dev/null || true)
     if [[ -n "$auto_langs" ]]; then
         if [[ -n "$preferred" ]] && echo "$auto_langs" | grep -q "^${preferred}$"; then
             echo "auto $preferred"
