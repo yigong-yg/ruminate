@@ -3,6 +3,7 @@
 #
 # Usage: ./youtube-ingest.sh <youtube-url> [--dry-run]
 # Env:   YOUTUBE_OUTPUT_DIR  — output dir (default: ~/.config/alma/memory/ingested/youtube)
+#        SUBTITLE_LANG       — preferred subtitle language (default: auto-detect best available)
 #        DRY_RUN             — "true" to print artifact instead of writing
 #        SEGMENT_MINUTES     — fallback segment length (default: 5)
 
@@ -12,17 +13,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 YOUTUBE_OUTPUT_DIR="${YOUTUBE_OUTPUT_DIR:-$HOME/.config/alma/memory/ingested/youtube}"
+SUBTITLE_LANG="${SUBTITLE_LANG:-}"
 DRY_RUN="${DRY_RUN:-false}"
 SEGMENT_MINUTES="${SEGMENT_MINUTES:-5}"
 
 log_warn() { echo "[WARN] $*" >&2; }
 
+# YAML-safe scalar quoting: wraps in double quotes if value contains
+# characters that are significant in YAML (: # " ' [ { ! | >).
+yaml_quote() {
+    local val="$1"
+    if [[ "$val" == *":"* || "$val" == *"#"* || "$val" == *'"'* || "$val" == *"'"* || "$val" == *"["* || "$val" == *"{"* || "$val" == *"!"* || "$val" == *"|"* || "$val" == *">"* ]]; then
+        val="${val//\\/\\\\}"
+        val="${val//\"/\\\"}"
+        printf '"%s"' "$val"
+    else
+        printf '%s' "$val"
+    fi
+}
+
 # --- Metadata Extraction ---
 # Reads yt-dlp JSON, outputs shell variable assignments to eval.
 extract_metadata() {
     local json_file="$1"
-    local id title channel duration upload_raw upload_date description
 
+    local id title channel duration upload_raw upload_date description
     id=$(jq -r '.id // ""' "$json_file")
     title=$(jq -r '.title // ""' "$json_file")
     channel=$(jq -r '.channel // ""' "$json_file")
@@ -45,33 +60,53 @@ extract_metadata() {
     printf 'DESCRIPTION=%q\n' "$description"
 }
 
-# --- Transcript Cleaning ---
-# Strips VTT headers, timestamps, and duplicate lines. Returns plain text with timestamps preserved as metadata.
-clean_vtt() {
-    local vtt_file="$1"
-    # Remove VTT headers, timestamp lines (HH:MM:SS.mmm --> ...), blank lines, and NOTE blocks
-    # Keep only the caption text lines, deduplicate
-    sed '/^WEBVTT/d; /^Kind:/d; /^Language:/d; /^NOTE/d; /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/d; /^$/d' "$vtt_file" \
-        | awk '!seen[$0]++' \
-        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
-}
-
 # --- Transcript Source Detection ---
-# Returns: "official", "auto", or "none"
+# Detects best available subtitle track.
+# Returns two values via stdout: "source lang" (e.g. "official en" or "auto zh-Hans")
+# If SUBTITLE_LANG is set, prefers that language. Otherwise auto-detects.
 detect_transcript_source() {
     local json_file="$1"
+    local preferred="$SUBTITLE_LANG"
 
-    local official_count
-    official_count=$(jq -r '.subtitles | to_entries | map(select(.key | test("^en"))) | length' "$json_file" 2>/dev/null || echo "0")
-    if [[ "$official_count" -gt 0 ]]; then
-        echo "official"
+    # Check official subtitles
+    local official_langs
+    official_langs=$(jq -r '.subtitles // {} | keys[]' "$json_file" 2>/dev/null || true)
+    if [[ -n "$official_langs" ]]; then
+        if [[ -n "$preferred" ]]; then
+            if echo "$official_langs" | grep -q "^${preferred}$"; then
+                echo "official $preferred"
+                return
+            fi
+        fi
+        # Prefer en if available, else first
+        if echo "$official_langs" | grep -q "^en$"; then
+            echo "official en"
+        else
+            local first_lang
+            first_lang=$(echo "$official_langs" | head -1)
+            echo "official $first_lang"
+        fi
         return
     fi
 
-    local auto_count
-    auto_count=$(jq -r '.automatic_captions | to_entries | map(select(.key | test("^en"))) | length' "$json_file" 2>/dev/null || echo "0")
-    if [[ "$auto_count" -gt 0 ]]; then
-        echo "auto"
+    # Check auto-generated captions
+    local auto_langs
+    auto_langs=$(jq -r '.automatic_captions // {} | keys[]' "$json_file" 2>/dev/null || true)
+    if [[ -n "$auto_langs" ]]; then
+        if [[ -n "$preferred" ]]; then
+            if echo "$auto_langs" | grep -q "^${preferred}$"; then
+                echo "auto $preferred"
+                return
+            fi
+        fi
+        # Prefer en if available, else first
+        if echo "$auto_langs" | grep -q "^en$"; then
+            echo "auto en"
+        else
+            local first_auto
+            first_auto=$(echo "$auto_langs" | head -1)
+            echo "auto $first_auto"
+        fi
         return
     fi
 
@@ -97,14 +132,12 @@ extract_chapters() {
     duration=$(jq -r '.duration // 0' "$json_file")
     local seg_seconds=$((SEGMENT_MINUTES * 60))
 
-    # Build segments array with jq
     local segments="[]"
     local start=0
     while [[ $start -lt $duration ]]; do
         local end=$((start + seg_seconds))
         [[ $end -gt $duration ]] && end=$duration
 
-        # Format HH:MM:SS for title
         local sh sm ss eh em es
         sh=$(printf '%02d' $((start / 3600)))
         sm=$(printf '%02d' $(((start % 3600) / 60)))
@@ -127,6 +160,8 @@ extract_chapters() {
 # --- Transcript Segmenting ---
 # Reads VTT, assigns each caption line to a chapter by timestamp.
 # Returns text with ---SEGMENT--- delimiters between chapters.
+# Uses consecutive-only dedup (not global) to preserve legitimate repeats
+# like choruses and refrains while removing VTT scrolling duplicates.
 segment_transcript() {
     local vtt_file="$1"
     local chapters_json="$2"
@@ -147,8 +182,10 @@ segment_transcript() {
         fi
     done < "$vtt_file"
 
-    # Deduplicate by text content
-    timed_lines=$(echo "$timed_lines" | awk -F'|' '!seen[$2]++')
+    # Consecutive-only dedup: removes VTT scrolling duplicates (same text in
+    # adjacent cues) but preserves legitimate non-consecutive repeats (choruses,
+    # refrains, callbacks). Global dedup would violate the ~90% low-loss contract.
+    timed_lines=$(echo "$timed_lines" | awk -F'|' 'prev != $2 {print} {prev = $2}')
 
     # Split into segments by chapter boundaries
     local i=0
@@ -186,17 +223,16 @@ build_artifact() {
     local segmented
     segmented=$(segment_transcript "$vtt_file" "$chapters_json")
 
-    # Count words in transcript
     local word_count
     word_count=$(echo "$segmented" | sed 's/---SEGMENT---//g' | wc -w | tr -d '[:space:]')
 
-    # Build frontmatter
+    # Build YAML frontmatter with yaml_quote for safe scalar escaping
     printf '%s\n' "---"
     printf 'schema_version: 1\n'
     printf 'artifact_type: youtube_canonical\n'
     printf 'video_id: %s\n' "$VIDEO_ID"
-    printf 'title: %s\n' "$TITLE"
-    printf 'channel: %s\n' "$CHANNEL"
+    printf 'title: %s\n' "$(yaml_quote "$TITLE")"
+    printf 'channel: %s\n' "$(yaml_quote "$CHANNEL")"
     printf 'duration_seconds: %s\n' "$DURATION"
     printf 'upload_date: %s\n' "$UPLOAD_DATE"
     printf 'ingested_at: %s\n' "$(date -Iseconds)"
@@ -210,8 +246,6 @@ build_artifact() {
 
     # Chapter sections
     local i=0
-    # Split segmented text by ---SEGMENT--- delimiter
-    local IFS_BAK="$IFS"
     local segments=()
     local current_seg=""
     while IFS= read -r line; do
@@ -224,7 +258,6 @@ ${line}" || current_seg="$line"
         fi
     done <<< "$segmented"
     [[ -n "$current_seg" ]] && segments+=("$current_seg")
-    IFS="$IFS_BAK"
 
     while [[ $i -lt $chapter_count ]]; do
         local ch_title
@@ -287,9 +320,11 @@ main() {
     eval "$(extract_metadata "$json_file")"
     echo "Video: $TITLE ($VIDEO_ID, ${DURATION}s)" >&2
 
-    # Step 2: Detect transcript source
-    local transcript_source
-    transcript_source=$(detect_transcript_source "$json_file")
+    # Step 2: Detect transcript source + language
+    local source_info transcript_source sub_lang
+    source_info=$(detect_transcript_source "$json_file")
+    transcript_source=$(echo "$source_info" | awk '{print $1}')
+    sub_lang=$(echo "$source_info" | awk '{print $2}')
 
     if [[ "$transcript_source" == "none" ]]; then
         echo "ERROR: No subtitles available for $VIDEO_ID." >&2
@@ -298,21 +333,36 @@ main() {
         exit 1
     fi
 
-    # Step 3: Download subtitles
-    echo "Downloading $transcript_source subtitles..." >&2
+    echo "Subtitle: $transcript_source ($sub_lang)" >&2
+
+    # Step 3: Download subtitles for the detected language
+    echo "Downloading $transcript_source subtitles ($sub_lang)..." >&2
     local sub_args=("--skip-download" "-P" "$work_dir" "--no-warnings" "-o" "%(id)s")
     if [[ "$transcript_source" == "official" ]]; then
-        sub_args=("--write-subs" "--sub-langs" "en" "${sub_args[@]}")
+        sub_args=("--write-subs" "--sub-langs" "$sub_lang" "${sub_args[@]}")
     else
-        sub_args=("--write-auto-subs" "--sub-langs" "en" "${sub_args[@]}")
+        sub_args=("--write-auto-subs" "--sub-langs" "$sub_lang" "${sub_args[@]}")
     fi
-    yt-dlp "${sub_args[@]}" "$url" > /dev/null 2>&1 || true
 
-    # Find the VTT file
-    local vtt_file
-    vtt_file=$(find "$work_dir" -name "*.vtt" -type f | head -1)
+    local ytdlp_log="$work_dir/ytdlp-subs.log"
+    if ! yt-dlp "${sub_args[@]}" "$url" > "$ytdlp_log" 2>&1; then
+        echo "ERROR: yt-dlp failed to download subtitles for $VIDEO_ID" >&2
+        echo "yt-dlp output:" >&2
+        cat "$ytdlp_log" >&2
+        exit 1
+    fi
+
+    # Find the VTT file deterministically: look for {video-id}.{lang}.vtt
+    local vtt_file="$work_dir/${VIDEO_ID}.${sub_lang}.vtt"
+    if [[ ! -f "$vtt_file" ]]; then
+        # Fallback: try any VTT with the video ID
+        vtt_file=$(find "$work_dir" -name "${VIDEO_ID}*.vtt" -type f | head -1)
+    fi
     if [[ -z "$vtt_file" || ! -f "$vtt_file" ]]; then
-        echo "ERROR: Failed to download subtitles for $VIDEO_ID" >&2
+        echo "ERROR: No VTT file found for $VIDEO_ID after download" >&2
+        echo "Expected: $work_dir/${VIDEO_ID}.${sub_lang}.vtt" >&2
+        echo "Available files:" >&2
+        ls -la "$work_dir"/*.vtt 2>/dev/null >&2 || echo "  (none)" >&2
         exit 1
     fi
 

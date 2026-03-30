@@ -189,42 +189,53 @@ eval "$(extract_metadata "$TEST_DIR/metadata_no_chapters.json")"
 assert_eq "upload_date conversion" "2026-03-15" "$UPLOAD_DATE"
 
 echo ""
-echo "=== Transcript Cleaning ==="
-
-# Test: clean_vtt strips VTT headers and timestamps, preserves text
-cleaned=$(clean_vtt "$TEST_DIR/subs.vtt")
-assert_contains "cleaned has text" "strangers to love" "$cleaned"
-assert_contains "cleaned has more text" "Never gonna give you up" "$cleaned"
-TOTAL=$((TOTAL + 1))
-if [[ "$cleaned" != *"-->"* ]]; then
-    echo "  PASS: timestamps removed"; PASS=$((PASS + 1))
-else
-    echo "  FAIL: timestamps still present"; FAIL=$((FAIL + 1))
-fi
-TOTAL=$((TOTAL + 1))
-if [[ "$cleaned" != *"WEBVTT"* ]]; then
-    echo "  PASS: VTT header removed"; PASS=$((PASS + 1))
-else
-    echo "  FAIL: VTT header still present"; FAIL=$((FAIL + 1))
-fi
-
-# Test: clean_vtt deduplicates repeated lines
-assert_eq "no duplicate lines" "1" "$(echo "$cleaned" | grep -c 'strangers to love')"
-
-echo ""
 echo "=== Transcript Source Detection ==="
 
-# Test: detect_transcript_source finds official subs
+# Test: detect_transcript_source finds official subs + language
 src=$(detect_transcript_source "$TEST_DIR/metadata.json")
-assert_eq "official subs detected" "official" "$src"
+assert_eq "official subs detected" "official en" "$src"
 
-# Test: detect_transcript_source finds auto subs
+# Test: detect_transcript_source finds auto subs + language
 src_auto=$(detect_transcript_source "$TEST_DIR/metadata_auto_subs.json")
-assert_eq "auto subs detected" "auto" "$src_auto"
+assert_eq "auto subs detected" "auto en" "$src_auto"
 
 # Test: detect_transcript_source returns none when no subs
 src_none=$(detect_transcript_source "$TEST_DIR/metadata_no_subs.json")
 assert_eq "no subs detected" "none" "$src_none"
+
+# Test: zh-only subtitles are detected (not English-only policy)
+cat > "$TEST_DIR/metadata_zh_only.json" << 'MOCK_META'
+{
+    "id": "zhonly123",
+    "title": "Chinese Only Video",
+    "channel": "Chinese Channel",
+    "duration": 120,
+    "upload_date": "20260301",
+    "description": "Only Chinese subtitles.",
+    "chapters": null,
+    "subtitles": {"zh-Hans": [{"ext": "vtt", "url": "https://example.com/zh.vtt"}]},
+    "automatic_captions": {}
+}
+MOCK_META
+src_zh=$(detect_transcript_source "$TEST_DIR/metadata_zh_only.json")
+assert_eq "zh-only official subs detected" "official zh-Hans" "$src_zh"
+
+# Test: SUBTITLE_LANG override prefers specified language
+cat > "$TEST_DIR/metadata_multi_lang.json" << 'MOCK_META'
+{
+    "id": "multilang789",
+    "title": "Multi Language Video",
+    "channel": "Global Channel",
+    "duration": 200,
+    "upload_date": "20260301",
+    "description": "Multiple subtitle tracks.",
+    "chapters": null,
+    "subtitles": {"en": [{"ext": "vtt"}], "zh-Hans": [{"ext": "vtt"}], "ja": [{"ext": "vtt"}]},
+    "automatic_captions": {}
+}
+MOCK_META
+src_pref=$(SUBTITLE_LANG="zh-Hans" detect_transcript_source "$TEST_DIR/metadata_multi_lang.json")
+assert_eq "preferred lang zh-Hans selected" "official zh-Hans" "$src_pref"
 
 echo ""
 echo "=== Chapter Detection ==="
@@ -256,6 +267,53 @@ assert_eq "3 chapters = 2 segment delimiters" "2" "$seg_parts"
 # First segment (0-60s) should contain "strangers to love"
 first_seg=$(echo "$seg_text" | awk '/---SEGMENT---/{exit} {print}')
 assert_contains "first segment has intro text" "strangers to love" "$first_seg"
+
+echo ""
+echo "=== Transcript Fidelity ==="
+
+# Test: non-consecutive repeated lines are preserved (choruses, refrains)
+# Global dedup would kill these; consecutive-only dedup should keep them
+cat > "$TEST_DIR/subs_chorus.vtt" << 'MOCK_VTT'
+WEBVTT
+
+00:00:01.000 --> 00:00:05.000
+Verse one lyrics here
+
+00:01:00.000 --> 00:01:05.000
+Never gonna give you up
+
+00:01:05.000 --> 00:01:10.000
+Never gonna let you down
+
+00:02:00.000 --> 00:02:05.000
+Verse two different lyrics
+
+00:03:00.000 --> 00:03:05.000
+Never gonna give you up
+
+00:03:05.000 --> 00:03:10.000
+Never gonna let you down
+MOCK_VTT
+
+cat > "$TEST_DIR/metadata_chorus.json" << 'MOCK_META'
+{"id":"chorus1","title":"Chorus Test","channel":"Test","duration":240,"upload_date":"20260101","description":"Test","chapters":null,"subtitles":{"en":[{"ext":"vtt"}]},"automatic_captions":{}}
+MOCK_META
+
+chorus_chapters=$(extract_chapters "$TEST_DIR/metadata_chorus.json")
+chorus_seg=$(segment_transcript "$TEST_DIR/subs_chorus.vtt" "$chorus_chapters")
+chorus_count=$(echo "$chorus_seg" | grep -c 'Never gonna give you up' || echo "0")
+assert_eq "chorus line preserved both times" "2" "$chorus_count"
+
+echo ""
+echo "=== YAML Safety ==="
+
+# Test: title with colon produces valid YAML (quoted)
+cat > "$TEST_DIR/metadata_colon_title.json" << 'MOCK_META'
+{"id":"colon1","title":"Part 1: The Beginning","channel":"Test: Channel","duration":60,"upload_date":"20260101","description":"Test","chapters":null,"subtitles":{"en":[{"ext":"vtt"}]},"automatic_captions":{}}
+MOCK_META
+colon_artifact=$(build_artifact "$TEST_DIR/metadata_colon_title.json" "$TEST_DIR/subs.vtt" "official")
+assert_contains "colon title is quoted" '"Part 1: The Beginning"' "$colon_artifact"
+assert_contains "colon channel is quoted" '"Test: Channel"' "$colon_artifact"
 
 echo ""
 echo "=== Canonical Artifact ==="
