@@ -236,7 +236,7 @@ build_chew_frontmatter() {
     printf 'source_truncated: %s\n' "$source_truncated"
     printf 'source_chars_used: %s\n' "$source_chars_used"
     printf 'source_chars_total: %s\n' "$source_chars_total"
-    printf 'provenance: source-only\n'
+    printf 'provenance: source-only-unverified\n'
     printf 'strategy: %s\n' "$strategy"
     printf 'wpm: %s\n' "$wpm"
     printf '%s\n' "---"
@@ -287,8 +287,17 @@ main() {
         exit 1
     fi
 
-    # Parse frontmatter
+    # Parse and validate frontmatter
     eval "$(parse_canonical_frontmatter "$input_file")"
+
+    # Input contract: must be a youtube_canonical artifact
+    local artifact_type
+    artifact_type=$(sed -n '/^---$/,/^---$/p' "$input_file" | grep '^artifact_type:' | head -1 | sed 's/^artifact_type:[[:space:]]*//' || true)
+    if [[ "$artifact_type" != "youtube_canonical" ]]; then
+        echo "ERROR: Input is not a youtube_canonical artifact (got: '${artifact_type:-missing}')" >&2
+        exit 1
+    fi
+
     if [[ -z "$VIDEO_ID" ]]; then
         echo "ERROR: Could not parse video_id from frontmatter in $input_file" >&2
         exit 1
@@ -316,11 +325,19 @@ main() {
     fi
 
     # --- Routing classifier ---
+    # WPM heuristic is unreliable for CJK languages (word_count from wc -w
+    # undercounts Chinese/Japanese/Korean where words are not space-delimited).
+    # Disable music routing for CJK to avoid false classification.
+    local is_cjk=false
+    case "$SUBTITLE_LANGUAGE" in
+        zh*|ja*|ko*) is_cjk=true ;;
+    esac
+
     local strategy="long_form"
     if [[ "$FORCE" != "true" ]]; then
         if [[ $source_chars_total -lt 2000 ]]; then
             strategy="pass_through"
-        elif [[ $wpm -gt 0 && $wpm -lt 30 ]]; then
+        elif [[ "$is_cjk" == "false" && $wpm -gt 0 && $wpm -lt 30 ]]; then
             strategy="music"
         fi
     fi

@@ -114,7 +114,9 @@ Before calling the LLM, the script classifies the input and selects a strategy:
 | `music` | WPM < 30 | Skip chew. Music strategy not yet implemented. Exit 0 |
 | `long_form` | Everything else | Full distillation prompt |
 
-WPM = `word_count / (duration_seconds / 60)` from canonical frontmatter.
+WPM = `word_count / (duration_seconds / 60)` from canonical frontmatter. Music routing is disabled for CJK languages (`zh*`, `ja*`, `ko*`) because `word_count` (from `wc -w`) undercounts non-whitespace languages, making WPM unreliable.
+
+Input must be a `youtube_canonical` artifact. Other artifact types are rejected.
 
 `--force` bypasses routing and always uses `long_form`. Does NOT bypass contract validation.
 
@@ -124,7 +126,7 @@ After LLM synthesis, the output is checked: if output chars >= input chars (comp
 
 **Idempotency:** Re-running overwrites existing chew artifact.
 
-**Provenance (ADR-015):** Each chew artifact frontmatter includes `provenance: source-only`, `strategy`, and `wpm`.
+**Provenance (ADR-015):** Each chew artifact frontmatter includes `provenance: source-only-unverified` (design intent, not validated guarantee), `strategy`, and `wpm`.
 
 **Environment Variables:**
 

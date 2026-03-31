@@ -520,24 +520,25 @@ echo ""
 echo "=== Contract Validation ==="
 
 # Test: expansion detection (output >= input) → exit 0, no artifact
+# Uses --force on entutorial1 (short fixture) to bypass pass_through routing
+# and actually reach the contract gate at output_chars >= source_chars_used
 MOCK_DIR2=$(mktemp -d)
-# Mock node that returns MORE text than the input body
+# Mock node that returns MORE text than the input body (~5000 chars > ~400 chars)
 cat > "$MOCK_DIR2/node" << 'MOCKSCRIPT'
 #!/bin/bash
-# Generate ~3000 chars of output (more than entutorial1 body of ~400 chars)
 for i in $(seq 1 60); do echo "This is a very long expansion line number $i that pads the output significantly beyond the input size."; done
 MOCKSCRIPT
 chmod +x "$MOCK_DIR2/node"
 
 expansion_dir="$TEST_DIR/expansion_chew"
-(
+expansion_stderr=$(
     export CHEW_OUTPUT_DIR="$expansion_dir"
     export OPENAI_API_KEY="test-key"
     export PATH="$MOCK_DIR2:$PATH"
     source "$SCRIPT"
     cygpath() { echo "$2"; }
     export -f cygpath
-    main "$TEST_DIR/youtube/entutorial1.md" 2>/dev/null
+    main "$TEST_DIR/youtube/entutorial1.md" --force 2>&1
 ) || true
 
 TOTAL=$((TOTAL + 1))
@@ -546,6 +547,7 @@ if [[ $(find "$expansion_dir" -name '*.md' 2>/dev/null | wc -l) -eq 0 ]]; then
 else
     echo "  FAIL: expansion artifact was written"; FAIL=$((FAIL + 1))
 fi
+assert_contains "expansion: contract violation message" "Contract violation" "$expansion_stderr"
 rm -rf "$MOCK_DIR2" "$expansion_dir"
 
 echo ""
@@ -553,9 +555,77 @@ echo "=== Provenance Frontmatter ==="
 
 # Test: frontmatter contains provenance, strategy, wpm
 fm_test=$(build_chew_frontmatter "v1" "T" "C" "en" "auto" "v1.md" "gpt-4o" "500" "false" "5000" "5000" "long_form" "142")
-assert_contains "fm has provenance" "provenance: source-only" "$fm_test"
+assert_contains "fm has provenance" "provenance: source-only-unverified" "$fm_test"
 assert_contains "fm has strategy" "strategy: long_form" "$fm_test"
 assert_contains "fm has wpm" "wpm: 142" "$fm_test"
+
+echo ""
+echo "=== CJK Routing Safety ==="
+
+# Test: CJK content with low wpm does NOT route to music
+# (wc -w undercounts Chinese, making wpm artificially low)
+cat > "$TEST_DIR/youtube/zhlow_wpm.md" << 'FIXTURE'
+---
+schema_version: 1
+artifact_type: youtube_canonical
+video_id: zhlow1
+title: Chinese Low WPM
+channel: Test
+duration_seconds: 7200
+upload_date: 2026-01-01
+ingested_at: 2026-03-30T00:00:00-06:00
+transcript_source: official
+subtitle_language: zh
+chapters: 1
+word_count: 800
+---
+
+## Content
+
+FIXTURE
+# Pad body > 2000 chars (each line ~30 chars, need ~70 lines)
+for i in $(seq 1 70); do
+    echo "这是第${i}段关于人工智能和世界模型的讨论内容，涉及深度学习和计算机视觉的前沿研究。" >> "$TEST_DIR/youtube/zhlow_wpm.md"
+done
+
+# wpm = 800*60/7200 = 6.6 → would be "music" without CJK guard
+zh_route=$(DRY_RUN=true bash "$SCRIPT" "$TEST_DIR/youtube/zhlow_wpm.md" --dry-run 2>&1)
+assert_contains "CJK low-wpm routes to long_form" "strategy=long_form" "$zh_route"
+
+echo ""
+echo "=== Input Contract Validation ==="
+
+# Test: non-canonical artifact is rejected
+cat > "$TEST_DIR/youtube/fake_artifact.md" << 'FIXTURE'
+---
+schema_version: 1
+artifact_type: briefing
+video_id: fake1
+title: Not a canonical artifact
+channel: Fake
+---
+
+## Some Content
+
+This is not a youtube_canonical artifact.
+FIXTURE
+fake_out=$(bash "$SCRIPT" "$TEST_DIR/youtube/fake_artifact.md" 2>&1) || true
+assert_contains "rejects non-canonical" "not a youtube_canonical" "$fake_out"
+
+# Test: missing artifact_type is rejected
+cat > "$TEST_DIR/youtube/no_type.md" << 'FIXTURE'
+---
+video_id: notype1
+title: Missing Type
+channel: Test
+---
+
+## Content
+
+Some body text here.
+FIXTURE
+notype_out=$(bash "$SCRIPT" "$TEST_DIR/youtube/no_type.md" 2>&1) || true
+assert_contains "rejects missing artifact_type" "not a youtube_canonical" "$notype_out"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="
