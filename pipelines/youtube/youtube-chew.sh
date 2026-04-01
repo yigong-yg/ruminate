@@ -27,6 +27,19 @@ FORCE="${FORCE:-false}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-120}"
 MAX_INPUT_CHARS="${MAX_INPUT_CHARS:-30000}"
 
+# --- Preflight ---
+preflight_check() {
+    local dry_run="${1:-false}"
+    if ! command -v jq > /dev/null 2>&1; then
+        echo "ERROR: jq not found on PATH." >&2
+        exit 1
+    fi
+    if [[ "$dry_run" == "false" ]] && ! command -v node > /dev/null 2>&1; then
+        echo "ERROR: node not found on PATH." >&2
+        exit 1
+    fi
+}
+
 # --- Helpers ---
 
 yaml_quote() {
@@ -286,6 +299,8 @@ main() {
         echo "ERROR: Input file not found: $input_file" >&2
         exit 1
     fi
+
+    preflight_check "$DRY_RUN"
 
     # Parse and validate frontmatter
     eval "$(parse_canonical_frontmatter "$input_file")"

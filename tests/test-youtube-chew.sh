@@ -483,6 +483,18 @@ else
     echo "  FAIL: partial file left after API failure"; FAIL=$((FAIL + 1))
 fi
 
+# Test: preflight rejects missing jq
+# Build a PATH that has standard tools but excludes the directory containing jq
+jq_real_dir=$(dirname "$(command -v jq)")
+no_jq_path=""
+IFS=':' read -ra _path_parts <<< "$PATH"
+for _p in "${_path_parts[@]}"; do
+    [[ "$_p" == "$jq_real_dir" ]] && continue
+    no_jq_path="${no_jq_path:+$no_jq_path:}$_p"
+done
+notools_out=$(PATH="$no_jq_path" bash "$SCRIPT" "$TEST_DIR/youtube/entutorial1.md" 2>&1) || true
+assert_contains "missing jq error" "jq not found" "$notools_out"
+
 rm -rf "$MOCK_DIR" "$fail_dir"
 
 echo ""

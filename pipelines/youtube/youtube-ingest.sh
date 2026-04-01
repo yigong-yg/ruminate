@@ -327,6 +327,10 @@ main() {
         echo "ERROR: yt-dlp not found on PATH. Install with: pip install yt-dlp" >&2
         exit 1
     fi
+    if ! command -v jq > /dev/null 2>&1; then
+        echo "ERROR: jq not found on PATH. Install from https://jqlang.github.io/jq/" >&2
+        exit 1
+    fi
 
     # Create temp working directory
     local work_dir
