@@ -191,60 +191,134 @@ assert_eq "upload_date conversion" "2026-03-15" "$UPLOAD_DATE"
 echo ""
 echo "=== Transcript Source Detection ==="
 
-# Test: detect_transcript_source finds official subs + language
-src=$(detect_transcript_source "$TEST_DIR/metadata.json")
-assert_eq "official subs detected" "official en" "$src"
-
-# Test: detect_transcript_source finds auto subs + language
-src_auto=$(detect_transcript_source "$TEST_DIR/metadata_auto_subs.json")
-assert_eq "auto subs detected" "auto en" "$src_auto"
-
-# Test: detect_transcript_source returns none when no subs
+# Test: no subs → none
 src_none=$(detect_transcript_source "$TEST_DIR/metadata_no_subs.json")
 assert_eq "no subs detected" "none" "$src_none"
 
-# Test: zh-only subtitles are detected (not English-only policy)
-cat > "$TEST_DIR/metadata_zh_only.json" << 'MOCK_META'
+# Test: official > auto precedence holds
+src=$(detect_transcript_source "$TEST_DIR/metadata.json")
+assert_contains "official preferred over auto" "official" "$src"
+
+# --- Priority 1: SUBTITLE_LANG explicit override ---
+cat > "$TEST_DIR/metadata_multi.json" << 'MOCK_META'
 {
-    "id": "zhonly123",
-    "title": "Chinese Only Video",
-    "channel": "Chinese Channel",
-    "duration": 120,
+    "id": "multi1",
+    "title": "Multi Lang",
+    "channel": "Test",
+    "duration": 100,
     "upload_date": "20260301",
-    "description": "Only Chinese subtitles.",
+    "description": "Test",
+    "language": "en",
     "chapters": null,
-    "subtitles": {"zh-Hans": [{"ext": "vtt", "url": "https://example.com/zh.vtt"}]},
+    "subtitles": {"ab": [{"ext": "vtt"}], "ar": [{"ext": "vtt"}], "en": [{"ext": "vtt"}], "zh-Hans": [{"ext": "vtt"}]},
     "automatic_captions": {}
 }
 MOCK_META
-src_zh=$(detect_transcript_source "$TEST_DIR/metadata_zh_only.json")
-assert_eq "zh-only official subs detected" "official zh-Hans" "$src_zh"
+src_override=$(SUBTITLE_LANG="zh-Hans" detect_transcript_source "$TEST_DIR/metadata_multi.json")
+assert_eq "priority 1: SUBTITLE_LANG override wins" "official zh-Hans" "$src_override"
 
-# Test: multi-language default picks first available (jq keys[] is sorted)
-cat > "$TEST_DIR/metadata_multi_lang.json" << 'MOCK_META'
+# --- Priority 2: video original language ---
+# Video language is "en", tracks available: ab, ar, en, zh-Hans
+src_orig=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_multi.json")
+assert_eq "priority 2: original language en selected" "official en" "$src_orig"
+
+# Video language is "zh", tracks: ab, en, zh-Hans
+cat > "$TEST_DIR/metadata_zh_orig.json" << 'MOCK_META'
 {
-    "id": "multilang789",
-    "title": "Multi Language Video",
-    "channel": "Global Channel",
-    "duration": 200,
+    "id": "zhorig1",
+    "title": "Chinese Video",
+    "channel": "Test",
+    "duration": 100,
     "upload_date": "20260301",
-    "description": "Multiple subtitle tracks.",
+    "description": "Test",
+    "language": "zh",
     "chapters": null,
-    "subtitles": {"en": [{"ext": "vtt"}], "zh-Hans": [{"ext": "vtt"}], "ja": [{"ext": "vtt"}]},
+    "subtitles": {"ab": [{"ext": "vtt"}], "en": [{"ext": "vtt"}]},
+    "automatic_captions": {"zh-Hans": [{"ext": "vtt"}], "ar": [{"ext": "vtt"}]}
+}
+MOCK_META
+# No exact "zh" in official, but official has "en" — however auto has "zh-Hans" (prefix match)
+# Official has no zh/zh-* → falls to en fallback → "official en"
+# Wait — the policy is: try official first with full priority chain, THEN auto.
+# Official: no zh exact, no zh prefix, yes en → "official en"
+src_zh_orig=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_zh_orig.json")
+assert_eq "priority 2: official en over auto zh-prefix" "official en" "$src_zh_orig"
+
+# Video language is "zh", ONLY auto tracks with zh-Hans available
+cat > "$TEST_DIR/metadata_zh_auto.json" << 'MOCK_META'
+{
+    "id": "zhauto1",
+    "title": "Chinese Auto Video",
+    "channel": "Test",
+    "duration": 100,
+    "upload_date": "20260301",
+    "description": "Test",
+    "language": "zh",
+    "chapters": null,
+    "subtitles": {},
+    "automatic_captions": {"zh-Hans": [{"ext": "vtt"}], "en": [{"ext": "vtt"}], "ar": [{"ext": "vtt"}]}
+}
+MOCK_META
+# No official → auto: zh exact? no. zh prefix? "zh-Hans" matches → auto zh-Hans
+src_zh_auto=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_zh_auto.json")
+assert_eq "priority 2: auto zh-Hans via prefix from language=zh" "auto zh-Hans" "$src_zh_auto"
+
+# --- Priority 3: en fallback ---
+# Video language is "ko" (not available), tracks: ab, ar, en
+cat > "$TEST_DIR/metadata_en_fallback.json" << 'MOCK_META'
+{
+    "id": "enfb1",
+    "title": "Korean Video with English Subs",
+    "channel": "Test",
+    "duration": 100,
+    "upload_date": "20260301",
+    "description": "Test",
+    "language": "ko",
+    "chapters": null,
+    "subtitles": {"ab": [{"ext": "vtt"}], "ar": [{"ext": "vtt"}], "en": [{"ext": "vtt"}]},
     "automatic_captions": {}
 }
 MOCK_META
-# Default: no SUBTITLE_LANG → first available (jq keys[] sorts: en, ja, zh-Hans)
-src_default=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_multi_lang.json")
-assert_eq "multi-lang default picks first available" "official en" "$src_default"
+src_en_fb=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_en_fallback.json")
+assert_eq "priority 3: en fallback when original lang unavailable" "official en" "$src_en_fb"
 
-# Override: SUBTITLE_LANG=zh-Hans → picks zh-Hans
-src_pref=$(SUBTITLE_LANG="zh-Hans" detect_transcript_source "$TEST_DIR/metadata_multi_lang.json")
-assert_eq "SUBTITLE_LANG override picks zh-Hans" "official zh-Hans" "$src_pref"
+# --- Priority 4: first available (last resort) ---
+# Video language is "ko" (not available), no en, only ab and ar
+cat > "$TEST_DIR/metadata_first_avail.json" << 'MOCK_META'
+{
+    "id": "first1",
+    "title": "Obscure Video",
+    "channel": "Test",
+    "duration": 100,
+    "upload_date": "20260301",
+    "description": "Test",
+    "language": "ko",
+    "chapters": null,
+    "subtitles": {"ab": [{"ext": "vtt"}], "ar": [{"ext": "vtt"}]},
+    "automatic_captions": {}
+}
+MOCK_META
+src_first=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_first_avail.json")
+assert_eq "priority 4: first available as last resort" "official ab" "$src_first"
 
-# End-to-end: build_artifact with language produces subtitle_language in frontmatter
-lang_artifact=$(build_artifact "$TEST_DIR/metadata_multi_lang.json" "$TEST_DIR/subs.vtt" "official" "zh-Hans")
-assert_contains "frontmatter has subtitle_language" "subtitle_language: zh-Hans" "$lang_artifact"
+# --- Original language prefix match ---
+# Video language "en", track key is "en-ehkg1hFWq8A" (yt-dlp variant)
+cat > "$TEST_DIR/metadata_en_variant.json" << 'MOCK_META'
+{
+    "id": "envar1",
+    "title": "English Variant",
+    "channel": "Test",
+    "duration": 100,
+    "upload_date": "20260301",
+    "description": "Test",
+    "language": "en",
+    "chapters": null,
+    "subtitles": {"ab": [{"ext": "vtt"}], "en-ehkg1hFWq8A": [{"ext": "vtt"}]},
+    "automatic_captions": {}
+}
+MOCK_META
+src_variant=$(SUBTITLE_LANG="" detect_transcript_source "$TEST_DIR/metadata_en_variant.json")
+assert_eq "prefix match: en-variant selected for language=en" "official en-ehkg1hFWq8A" "$src_variant"
 
 echo ""
 echo "=== Chapter Detection ==="

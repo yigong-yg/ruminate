@@ -1,9 +1,9 @@
 #!/bin/bash
 # pipelines/youtube/youtube-chew.sh — Canonical artifact → chew-short derived view
 #
-# Usage: ./youtube-chew.sh <canonical-artifact-path> [--dry-run] [--model MODEL]
+# Usage: ./youtube-chew.sh <canonical-artifact-path> [--dry-run] [--model MODEL] [--force]
 # Env:   CHEW_OUTPUT_DIR  — output dir (default: sibling chew/ dir of input)
-#        CHEW_MODEL        — OpenAI model (default: gpt-4o-mini)
+#        CHEW_MODEL        — OpenAI model (default: gpt-4o)
 #        OPENAI_API_KEY    — required (reads from .env via grep)
 #        DRY_RUN           — "true" to print prompt, skip synthesis
 
@@ -23,8 +23,22 @@ fi
 CHEW_OUTPUT_DIR="${CHEW_OUTPUT_DIR:-}"
 CHEW_MODEL="${CHEW_MODEL:-gpt-4o}"
 DRY_RUN="${DRY_RUN:-false}"
+FORCE="${FORCE:-false}"
 CURL_TIMEOUT="${CURL_TIMEOUT:-120}"
 MAX_INPUT_CHARS="${MAX_INPUT_CHARS:-30000}"
+
+# --- Preflight ---
+preflight_check() {
+    local dry_run="${1:-false}"
+    if ! command -v jq > /dev/null 2>&1; then
+        echo "ERROR: jq not found on PATH." >&2
+        exit 1
+    fi
+    if [[ "$dry_run" == "false" ]] && ! command -v node > /dev/null 2>&1; then
+        echo "ERROR: node not found on PATH." >&2
+        exit 1
+    fi
+}
 
 # --- Helpers ---
 
@@ -49,12 +63,15 @@ parse_canonical_frontmatter() {
     fm=$(sed -n '/^---$/,/^---$/p' "$artifact" | sed '1d;$d')
 
     local video_id title channel subtitle_language transcript_source
+    local src_word_count duration_seconds
 
     video_id=$(echo "$fm" | grep '^video_id:' | head -1 | sed 's/^video_id:[[:space:]]*//')
     title=$(echo "$fm" | grep '^title:' | head -1 | sed 's/^title:[[:space:]]*//')
     channel=$(echo "$fm" | grep '^channel:' | head -1 | sed 's/^channel:[[:space:]]*//')
     subtitle_language=$(echo "$fm" | grep '^subtitle_language:' | head -1 | sed 's/^subtitle_language:[[:space:]]*//')
     transcript_source=$(echo "$fm" | grep '^transcript_source:' | head -1 | sed 's/^transcript_source:[[:space:]]*//')
+    src_word_count=$(echo "$fm" | grep '^word_count:' | head -1 | sed 's/^word_count:[[:space:]]*//')
+    duration_seconds=$(echo "$fm" | grep '^duration_seconds:' | head -1 | sed 's/^duration_seconds:[[:space:]]*//')
 
     # Strip surrounding quotes if present
     video_id="${video_id%\"}"; video_id="${video_id#\"}"
@@ -68,6 +85,8 @@ parse_canonical_frontmatter() {
     printf 'CHANNEL=%q\n' "$channel"
     printf 'SUBTITLE_LANGUAGE=%q\n' "$subtitle_language"
     printf 'TRANSCRIPT_SOURCE=%q\n' "$transcript_source"
+    printf 'SRC_WORD_COUNT=%q\n' "${src_word_count:-0}"
+    printf 'SRC_DURATION=%q\n' "${duration_seconds:-0}"
 }
 
 # --- Body Extraction ---
@@ -212,6 +231,8 @@ build_chew_frontmatter() {
     local source_truncated="${9:-false}"
     local source_chars_used="${10:-0}"
     local source_chars_total="${11:-0}"
+    local strategy="${12:-long_form}"
+    local wpm="${13:-0}"
 
     printf '%s\n' "---"
     printf 'schema_version: 1\n'
@@ -228,6 +249,9 @@ build_chew_frontmatter() {
     printf 'source_truncated: %s\n' "$source_truncated"
     printf 'source_chars_used: %s\n' "$source_chars_used"
     printf 'source_chars_total: %s\n' "$source_chars_total"
+    printf 'provenance: source-only-unverified\n'
+    printf 'strategy: %s\n' "$strategy"
+    printf 'wpm: %s\n' "$wpm"
     printf '%s\n' "---"
 }
 
@@ -254,6 +278,7 @@ main() {
     for arg in "$@"; do
         case "$arg" in
             --dry-run) DRY_RUN=true ;;
+            --force) FORCE=true ;;
             --model) shift_next=model ;;
             *)
                 if [[ "$shift_next" == "model" ]]; then
@@ -266,7 +291,7 @@ main() {
     done
 
     if [[ -z "$input_file" ]]; then
-        echo "Usage: youtube-chew.sh <canonical-artifact-path> [--dry-run] [--model MODEL]" >&2
+        echo "Usage: youtube-chew.sh <canonical-artifact-path> [--dry-run] [--model MODEL] [--force]" >&2
         exit 1
     fi
 
@@ -275,8 +300,19 @@ main() {
         exit 1
     fi
 
-    # Parse frontmatter
+    preflight_check "$DRY_RUN"
+
+    # Parse and validate frontmatter
     eval "$(parse_canonical_frontmatter "$input_file")"
+
+    # Input contract: must be a youtube_canonical artifact
+    local artifact_type
+    artifact_type=$(sed -n '/^---$/,/^---$/p' "$input_file" | grep '^artifact_type:' | head -1 | sed 's/^artifact_type:[[:space:]]*//' || true)
+    if [[ "$artifact_type" != "youtube_canonical" ]]; then
+        echo "ERROR: Input is not a youtube_canonical artifact (got: '${artifact_type:-missing}')" >&2
+        exit 1
+    fi
+
     if [[ -z "$VIDEO_ID" ]]; then
         echo "ERROR: Could not parse video_id from frontmatter in $input_file" >&2
         exit 1
@@ -297,6 +333,62 @@ main() {
     local source_truncated="false"
     local source_chars_used=$source_chars_total
 
+    # Compute WPM for routing
+    local wpm=0
+    if [[ "$SRC_DURATION" -gt 0 ]] 2>/dev/null; then
+        wpm=$(( SRC_WORD_COUNT * 60 / SRC_DURATION ))
+    fi
+
+    # --- Routing classifier ---
+    # WPM heuristic is unreliable for CJK languages (word_count from wc -w
+    # undercounts Chinese/Japanese/Korean where words are not space-delimited).
+    # Disable music routing for CJK to avoid false classification.
+    local is_cjk=false
+    case "$SUBTITLE_LANGUAGE" in
+        zh*|ja*|ko*) is_cjk=true ;;
+    esac
+
+    local strategy="long_form"
+    if [[ "$FORCE" != "true" ]]; then
+        if [[ $source_chars_total -lt 2000 ]]; then
+            strategy="pass_through"
+        elif [[ "$is_cjk" == "false" && $wpm -gt 0 && $wpm -lt 30 ]]; then
+            strategy="music"
+        fi
+    fi
+
+    echo "Strategy: $strategy (chars=$source_chars_total, wpm=$wpm, force=$FORCE)" >&2
+
+    # Dry-run: show strategy and prompt (if long_form), then exit
+    if [[ "$DRY_RUN" == "true" ]]; then
+        if [[ "$strategy" != "long_form" ]]; then
+            echo "--- DRY-RUN: strategy=$strategy, would skip chew (video=$VIDEO_ID) ---" >&2
+            exit 0
+        fi
+        # For long_form dry-run, build and show the prompt
+        if [[ $source_chars_total -gt $MAX_INPUT_CHARS ]]; then
+            body="${body:0:$MAX_INPUT_CHARS}
+
+[... transcript truncated at ${MAX_INPUT_CHARS} of ${source_chars_total} chars for token budget.]"
+        fi
+        local prompt
+        prompt=$(build_chew_prompt "$body" "$TITLE" "$CHANNEL")
+        echo "--- DRY-RUN: chew-short prompt (model=$CHEW_MODEL, video=$VIDEO_ID, strategy=$strategy) ---"
+        echo ""
+        echo "$prompt"
+        return 0
+    fi
+
+    # Handle non-long_form strategies (non-dry-run)
+    if [[ "$strategy" == "pass_through" ]]; then
+        echo "Skipping chew: source too short (${source_chars_total} chars < 2000). Canonical artifact is the final form." >&2
+        exit 0
+    fi
+    if [[ "$strategy" == "music" ]]; then
+        echo "Skipping chew: music content detected (wpm=${wpm} < 30). Music strategy not yet implemented." >&2
+        exit 0
+    fi
+
     # Truncate if body exceeds MAX_INPUT_CHARS (avoids TPM/context limits)
     if [[ $source_chars_total -gt $MAX_INPUT_CHARS ]]; then
         echo "Input body is ${source_chars_total} chars, truncating to ${MAX_INPUT_CHARS} chars" >&2
@@ -311,14 +403,6 @@ main() {
     local prompt
     prompt=$(build_chew_prompt "$body" "$TITLE" "$CHANNEL")
 
-    # Dry-run
-    if [[ "$DRY_RUN" == "true" ]]; then
-        echo "--- DRY-RUN: chew-short prompt (model=$CHEW_MODEL, video=$VIDEO_ID) ---"
-        echo ""
-        echo "$prompt"
-        return 0
-    fi
-
     # Synthesize
     echo "Synthesizing chew-short (model=$CHEW_MODEL)..." >&2
     local chew_content
@@ -332,6 +416,14 @@ main() {
         exit 1
     fi
 
+    # --- Contract post-validation: reject expansion ---
+    local output_chars=${#chew_content}
+    if [[ $output_chars -ge $source_chars_used ]]; then
+        echo "WARNING: Chew output ($output_chars chars) >= input ($source_chars_used chars). CR >= 1.0. Discarding." >&2
+        echo "Contract violation: expansion detected. Canonical artifact is the final form." >&2
+        exit 0
+    fi
+
     # Build frontmatter
     local word_count
     word_count=$(echo "$chew_content" | wc -w | tr -d '[:space:]')
@@ -341,7 +433,7 @@ main() {
     local frontmatter
     frontmatter=$(build_chew_frontmatter "$VIDEO_ID" "$TITLE" "$CHANNEL" \
         "$SUBTITLE_LANGUAGE" "$TRANSCRIPT_SOURCE" "$source_basename" "$CHEW_MODEL" "$word_count" \
-        "$source_truncated" "$source_chars_used" "$source_chars_total")
+        "$source_truncated" "$source_chars_used" "$source_chars_total" "$strategy" "$wpm")
 
     local full_artifact="${frontmatter}
 ${chew_content}"

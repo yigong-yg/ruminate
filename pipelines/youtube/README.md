@@ -54,12 +54,14 @@ Not implemented:
 
 ## Subtitle Language
 
-Language selection is automatic by default:
-1. Official/manual captions — first available language
-2. Auto-generated captions — first available language
-3. No subtitles → fail with message
+Official captions are always preferred over auto-generated. Within each source, language is chosen by priority:
 
-No language is implicitly preferred. Override with `SUBTITLE_LANG` to select a specific track (e.g. `SUBTITLE_LANG=zh-Hans`).
+1. `SUBTITLE_LANG` explicit override (e.g. `SUBTITLE_LANG=zh-Hans`)
+2. Video's original language (from yt-dlp `.language` metadata), with prefix matching for variants like `en-US`
+3. `en` fallback
+4. First available track
+
+If no official track matches any priority, the same policy is applied to auto-generated captions. If neither source has any tracks, the script fails with a clear error.
 
 ## Environment Variables
 
@@ -102,7 +104,29 @@ Long canonical artifacts may be truncated before synthesis to stay within model 
 - Chinese sources require original-language fragments as grounding proof
 - Generic statements ("X emphasizes Y") are explicitly prohibited
 
+**Routing (ADR-014):**
+
+Before calling the LLM, the script classifies the input and selects a strategy:
+
+| Strategy | Condition | Behavior |
+|----------|-----------|----------|
+| `pass_through` | Body < 2000 chars | Skip chew. Canonical is the final form. Exit 0 |
+| `music` | WPM < 30 | Skip chew. Music strategy not yet implemented. Exit 0 |
+| `long_form` | Everything else | Full distillation prompt |
+
+WPM = `word_count / (duration_seconds / 60)` from canonical frontmatter. Music routing is disabled for CJK languages (`zh*`, `ja*`, `ko*`) because `word_count` (from `wc -w`) undercounts non-whitespace languages, making WPM unreliable.
+
+Input must be a `youtube_canonical` artifact. Other artifact types are rejected.
+
+`--force` bypasses routing and always uses `long_form`. Does NOT bypass contract validation.
+
+**Contract validation:**
+
+After LLM synthesis, the output is checked: if output chars >= input chars (compression ratio >= 1.0), the output is discarded. This is exit 0, not an error — it's the contract refusing expansion.
+
 **Idempotency:** Re-running overwrites existing chew artifact.
+
+**Provenance (ADR-015):** Each chew artifact frontmatter includes `provenance: source-only-unverified` (design intent, not validated guarantee), `strategy`, and `wpm`.
 
 **Environment Variables:**
 
@@ -111,15 +135,19 @@ Long canonical artifacts may be truncated before synthesis to stay within model 
 | `CHEW_OUTPUT_DIR` | (sibling `chew/` dir of input) | Override output directory |
 | `CHEW_MODEL` | `gpt-4o` | OpenAI model, override with `--model` |
 | `OPENAI_API_KEY` | (from `.env`) | Required for synthesis |
+| `MAX_INPUT_CHARS` | `30000` | Truncation limit for long transcripts |
 
 **Usage:**
 
 ```bash
-# Preview prompt
+# Preview prompt (shows strategy)
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --dry-run
 
 # Generate chew-short
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md
+
+# Force chew on micro-input (bypasses routing, not contract)
+bash pipelines/youtube/youtube-chew.sh path/to/short-video.md --force
 
 # Different model
 bash pipelines/youtube/youtube-chew.sh path/to/video-id.md --model gpt-4o-mini
